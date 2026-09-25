@@ -31,6 +31,6 @@ GMAIL_CLIENT_SECRET = CREDENTIALS_DIR / "gmail_client_secret.json"
 GMAIL_TOKEN = CREDENTIALS_DIR / "gmail.token.json"
 OUTLOOK_TOKEN = CREDENTIALS_DIR / "outlook.token.json"
 
-POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
+POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 DB_PATH = ROOT / os.getenv("DB_PATH", "agent.db")
 PORT = int(os.getenv("PORT", "8000"))

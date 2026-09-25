@@ -7,7 +7,7 @@ figures out who and what from your past mail.
 
 ## How it works
 
-- **Poller** scans each inbox every minute. Claude decides whether a human reply is expected
+- **Poller** scans each inbox every 5 minutes. Claude decides whether a human reply is expected
   (newsletters, receipts, notifications, FYI threads are skipped) and drafts one in your style.
 - **SMS** goes over Sendblue (iMessage/SMS). Only texts from `MY_PHONE` are accepted.
 - **Approval gate**: a draft carries a version number. Every edit bumps it. `send_draft` refuses unless
