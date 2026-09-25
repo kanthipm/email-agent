@@ -1,5 +1,5 @@
-"""Claude layer: triage inbound mail, draft replies in the user's voice, and run the
-SMS conversation (edit / create / send drafts, look things up in past mail)."""
+"""LLM layer (Groq, OpenAI-compatible chat API): triage inbound mail, draft replies in the
+user's voice, and run the SMS conversation (edit / create / send drafts, look up past mail)."""
 from __future__ import annotations
 
 import json
@@ -8,29 +8,41 @@ import re
 import time
 from typing import Any
 
-import anthropic
+import httpx
 
 from app import config, store
 from app.mail import get as get_provider, providers
 from app.mail.base import EmailMessage
 
 log = logging.getLogger(__name__)
-client = anthropic.Anthropic()
-BETAS = ["server-side-fallback-2026-07-01"]
+BASE_URL = "https://api.groq.com/openai/v1"
 MAX_TOOL_ROUNDS = 12
 STYLE_TTL_S = 24 * 3600
 
 
-def _call(**kw: Any) -> anthropic.types.beta.BetaMessage:
-    resp = client.beta.messages.create(model=config.CLAUDE_MODEL, betas=BETAS, fallbacks="default", **kw)
-    if resp.stop_reason == "refusal":
-        why = resp.stop_details.explanation if resp.stop_details else ""
-        raise RuntimeError(f"Claude declined the request: {why}")
-    return resp
-
-
-def _text(resp: anthropic.types.beta.BetaMessage) -> str:
-    return "".join(b.text for b in resp.content if b.type == "text").strip()
+def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: bool = False,
+          max_tokens: int = 4000, temperature: float = 0.4) -> dict:
+    """One chat completion. Returns the assistant message dict. Retries once on 429/5xx."""
+    if not config.GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not set")
+    body: dict[str, Any] = {"model": config.GROQ_MODEL, "messages": messages,
+                            "max_tokens": max_tokens, "temperature": temperature}
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
+    for attempt in range(2):
+        r = httpx.post(f"{BASE_URL}/chat/completions", json=body, headers=headers, timeout=90.0)
+        if r.status_code == 429 or r.status_code >= 500:
+            if attempt == 0:
+                time.sleep(float(r.headers.get("retry-after", "3")))
+                continue
+        if r.status_code >= 400:
+            raise RuntimeError(f"Groq {r.status_code}: {r.text[:300]}")
+        return r.json()["choices"][0]["message"]
+    raise RuntimeError("Groq unavailable")
 
 
 def _me() -> str:
@@ -72,9 +84,8 @@ def _accounts_line() -> str:
     return ", ".join(f"{n} <{p.address}>" for n, p in providers().items()) or "(none configured)"
 
 
-def _persona() -> list[dict]:
-    """Stable system prompt (cached): who the user is and how they write."""
-    text = (
+def _persona() -> str:
+    return (
         f"You are the personal email assistant of {_me()}. You write emails in their voice and manage "
         f"them with them over text message.\n"
         f"Email accounts: {_accounts_line()}\n\n"
@@ -83,23 +94,9 @@ def _persona() -> list[dict]:
         "Never invent facts, dates, prices, commitments, or details only they would know; leave a short "
         "bracketed placeholder like [date] instead."
     )
-    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
 
 # ---------------------------------------------------------------- triage
-TRIAGE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "needs_reply": {"type": "boolean"},
-        "reason": {"type": "string"},
-        "summary": {"type": "string"},
-        "reply_body": {"type": "string"},
-    },
-    "required": ["needs_reply", "reason", "summary", "reply_body"],
-    "additionalProperties": False,
-}
-
-
 def triage(email: EmailMessage, thread: list[EmailMessage]) -> dict:
     """Decide whether the user should reply and, if so, draft the reply."""
     history = "\n\n".join(m.short(1200) for m in thread if m.id != email.id) or "(no earlier messages)"
@@ -109,20 +106,19 @@ def triage(email: EmailMessage, thread: list[EmailMessage]) -> dict:
         "needs_reply is true when a real person is asking them something, waiting on them, or clearly "
         "expects an acknowledgement. It is false for newsletters, notifications, receipts, marketing, "
         "automated or no-reply mail, mass announcements, FYI/CC-only mail, calendar responses, and "
-        f"threads where {_me()} already answered the latest question.\n"
-        "summary: one sentence for a text message: who, what they want, any deadline.\n"
-        "reply_body: if needs_reply, the full reply in their voice (plain text, no subject line); "
-        "keep it as short as they would. Otherwise an empty string.\n\n"
+        f"threads where {_me()} already answered the latest question.\n\n"
+        "Answer with only a JSON object with exactly these keys:\n"
+        '{"needs_reply": true|false, "reason": "<short>", "summary": "<one sentence for a text message: '
+        'who, what they want, any deadline>", "reply_body": "<if needs_reply, the full reply in their voice, '
+        'plain text, no subject line, as short as they would write; otherwise an empty string>"}\n\n'
         f"## Earlier messages in this thread (oldest first)\n{history}\n\n"
         f"## New email\n{email.short(6000)}"
     )
-    resp = _call(
-        max_tokens=4000,
-        system=_persona(),
-        messages=[{"role": "user", "content": prompt}],
-        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
-    )
-    return json.loads(_text(resp))
+    msg = _chat([{"role": "system", "content": _persona()}, {"role": "user", "content": prompt}],
+                json_mode=True, temperature=0.3)
+    data = json.loads(msg["content"] or "{}")
+    return {"needs_reply": bool(data.get("needs_reply")), "reason": str(data.get("reason", "")),
+            "summary": str(data.get("summary", "")), "reply_body": str(data.get("reply_body", ""))}
 
 
 # ---------------------------------------------------------------- SMS agent tools
@@ -252,56 +248,44 @@ def _tool_find_contact(name: str) -> str:
             for c in p.find_contacts(name)[:6]:
                 rows.append((c.sent_to_count, c.received_count, acct, c))
         except Exception as e:
-            rows.append((0, 0, acct, None))
             log.warning("find_contacts on %s failed: %s", acct, e)
     rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
     lines = [f"[{acct}] {c.name or '?'} <{c.email}> — you emailed them {s}x, they emailed you {r}x, last {c.last_seen}"
-             for s, r, acct, c in rows if c]
+             for s, r, acct, c in rows]
     return "\n".join(lines) or f"No one matching '{name}' in past mail."
 
 
+def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    return {"type": "function", "function": {"name": name, "description": description, "parameters": {
+        "type": "object", "properties": properties, "required": required}}}
+
+
+_STR_LIST = {"type": "array", "items": {"type": "string"}}
+_ACCOUNT = {"type": "string", "enum": ["gmail", "outlook"]}
+
 TOOLS: list[dict] = [
-    {"name": "list_drafts", "description": "List drafts waiting for the user's approval.",
-     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
-    {"name": "get_draft", "description": "Full contents of one draft.",
-     "input_schema": {"type": "object", "properties": {"draft_id": {"type": "integer"}},
-                      "required": ["draft_id"], "additionalProperties": False}},
-    {"name": "update_draft",
-     "description": "Rewrite parts of a pending draft. Pass the complete new body, not a diff.",
-     "input_schema": {"type": "object", "properties": {
-         "draft_id": {"type": "integer"}, "body": {"type": "string"}, "subject": {"type": "string"},
-         "to": {"type": "array", "items": {"type": "string"}}, "cc": {"type": "array", "items": {"type": "string"}}},
-         "required": ["draft_id"], "additionalProperties": False}},
-    {"name": "create_draft",
-     "description": "Start a new email or a reply. For a reply pass reply_to_email_id (the provider id from "
-                    "search_emails/read_email) and leave subject empty to reuse the thread subject.",
-     "input_schema": {"type": "object", "properties": {
-         "account": {"type": "string", "enum": ["gmail", "outlook"]},
-         "to": {"type": "array", "items": {"type": "string"}}, "subject": {"type": "string"},
-         "body": {"type": "string"}, "cc": {"type": "array", "items": {"type": "string"}},
-         "reply_to_email_id": {"type": "string"}},
-         "required": ["account", "to", "subject", "body"], "additionalProperties": False}},
-    {"name": "send_draft",
-     "description": "Send a draft. Only after the user explicitly approved the exact text they were shown.",
-     "input_schema": {"type": "object", "properties": {"draft_id": {"type": "integer"}},
-                      "required": ["draft_id"], "additionalProperties": False}},
-    {"name": "discard_draft", "description": "Throw a pending draft away.",
-     "input_schema": {"type": "object", "properties": {"draft_id": {"type": "integer"}},
-                      "required": ["draft_id"], "additionalProperties": False}},
-    {"name": "search_emails",
-     "description": "Search past mail. Gmail search syntax works (from:, to:, subject:, newer_than:7d); plain "
-                    "words work on both accounts. Omit account to search all.",
-     "input_schema": {"type": "object", "properties": {
-         "query": {"type": "string"}, "account": {"type": "string", "enum": ["gmail", "outlook"]},
-         "max_results": {"type": "integer"}}, "required": ["query"], "additionalProperties": False}},
-    {"name": "read_email", "description": "Read one email in full, with the rest of its thread.",
-     "input_schema": {"type": "object", "properties": {"account": {"type": "string"}, "email_id": {"type": "string"}},
-                      "required": ["account", "email_id"], "additionalProperties": False}},
-    {"name": "find_contact",
-     "description": "Resolve a person's name or partial address to email addresses, ranked by how often the user "
-                    "emails them.",
-     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}},
-                      "required": ["name"], "additionalProperties": False}},
+    _fn("list_drafts", "List drafts waiting for the user's approval.", {}, []),
+    _fn("get_draft", "Full contents of one draft.", {"draft_id": {"type": "integer"}}, ["draft_id"]),
+    _fn("update_draft", "Rewrite parts of a pending draft. Pass the complete new body, not a diff.",
+        {"draft_id": {"type": "integer"}, "body": {"type": "string"}, "subject": {"type": "string"},
+         "to": _STR_LIST, "cc": _STR_LIST}, ["draft_id"]),
+    _fn("create_draft",
+        "Start a new email or a reply. For a reply pass reply_to_email_id (the provider id from "
+        "search_emails/read_email) and leave subject empty to reuse the thread subject.",
+        {"account": _ACCOUNT, "to": _STR_LIST, "subject": {"type": "string"}, "body": {"type": "string"},
+         "cc": _STR_LIST, "reply_to_email_id": {"type": "string"}}, ["account", "to", "subject", "body"]),
+    _fn("send_draft", "Send a draft. Only after the user explicitly approved the exact text they were shown.",
+        {"draft_id": {"type": "integer"}}, ["draft_id"]),
+    _fn("discard_draft", "Throw a pending draft away.", {"draft_id": {"type": "integer"}}, ["draft_id"]),
+    _fn("search_emails",
+        "Search past mail. Gmail search syntax works (from:, to:, subject:, newer_than:7d); plain words work "
+        "on both accounts. Omit account to search all.",
+        {"query": {"type": "string"}, "account": _ACCOUNT, "max_results": {"type": "integer"}}, ["query"]),
+    _fn("read_email", "Read one email in full, with the rest of its thread.",
+        {"account": _ACCOUNT, "email_id": {"type": "string"}}, ["account", "email_id"]),
+    _fn("find_contact",
+        "Resolve a person's name or partial address to email addresses, ranked by how often the user emails them.",
+        {"name": {"type": "string"}}, ["name"]),
 ]
 
 _HANDLERS = {
@@ -325,11 +309,7 @@ AGENT_RULES = """
 
 
 def _context_block() -> str:
-    return f"<context>\nPending drafts:\n{_tool_list_drafts()}\nAccounts: {_accounts_line()}\n</context>"
-
-
-def _keep(block: Any) -> bool:
-    return block.type in ("text", "thinking", "redacted_thinking", "tool_use")
+    return f"\n\n<context>\nPending drafts:\n{_tool_list_drafts()}\nAccounts: {_accounts_line()}\n</context>"
 
 
 def _mark_shown_drafts(reply: str) -> None:
@@ -342,34 +322,32 @@ def _mark_shown_drafts(reply: str) -> None:
 def handle_sms(user_text: str) -> str:
     """One conversational turn: returns the text to send back to the user."""
     history = store.recent_chat()
-    store.append_chat("user", user_text)
-    messages: list[dict] = history + [{"role": "user", "content": [
-        {"type": "text", "text": user_text},
-        {"type": "text", "text": _context_block()},
-    ]}]
-    system = _persona() + [{"type": "text", "text": AGENT_RULES}]
+    store.append_chat({"role": "user", "content": user_text})
+    messages: list[dict] = [{"role": "system", "content": _persona() + "\n" + AGENT_RULES}]
+    messages += history + [{"role": "user", "content": user_text + _context_block()}]
     reply = ""
     for _ in range(MAX_TOOL_ROUNDS):
-        resp = _call(max_tokens=8000, system=system, tools=TOOLS, messages=messages,
-                     output_config={"effort": "medium"})
-        content = [b.model_dump(exclude_none=True) for b in resp.content if _keep(b)]
-        messages.append({"role": "assistant", "content": content})
-        store.append_chat("assistant", content)
-        reply = _text(resp)
-        calls = [b for b in resp.content if b.type == "tool_use"]
-        if resp.stop_reason != "tool_use" or not calls:
+        msg = _chat(messages, tools=TOOLS, max_tokens=4000)
+        assistant = {"role": "assistant", "content": msg.get("content") or ""}
+        calls = msg.get("tool_calls") or []
+        if calls:
+            assistant["tool_calls"] = calls
+        messages.append(assistant)
+        store.append_chat(assistant)
+        reply = assistant["content"].strip()
+        if not calls:
             break
-        results = []
         for c in calls:
+            name = c["function"]["name"]
             try:
-                out = _HANDLERS[c.name](**c.input)
+                args = json.loads(c["function"].get("arguments") or "{}")
+                out = _HANDLERS[name](**args)
             except Exception as e:
-                log.exception("tool %s failed", c.name)
+                log.exception("tool %s failed", name)
                 out = f"Error: {e}"
-            results.append({"type": "tool_result", "tool_use_id": c.id, "content": out,
-                            "is_error": out.startswith("Error")})
-        messages.append({"role": "user", "content": results})
-        store.append_chat("user", results)
+            result = {"role": "tool", "tool_call_id": c["id"], "content": out}
+            messages.append(result)
+            store.append_chat(result)
     else:
         reply = reply or "I got stuck on that. Can you rephrase?"
     if not reply:

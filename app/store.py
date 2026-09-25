@@ -159,24 +159,23 @@ def discard_draft(draft_id: int) -> None:
 
 
 # ---- chat history (the SMS conversation with the agent) ----
-def append_chat(role: str, content: Any) -> None:
+def append_chat(message: dict) -> None:
+    """Store one chat-completion message (user / assistant / tool) verbatim."""
     with conn() as c:
         c.execute("INSERT INTO chat(role,content,created_at) VALUES(?,?,?)",
-                  (role, json.dumps(content), now_iso()))
+                  (message["role"], json.dumps(message), now_iso()))
 
 
 def recent_chat(turns: int = 12) -> list[dict]:
     """The last `turns` user turns and everything after them, oldest first. Always starts at a
-    plain user text message, never inside a tool_use/tool_result pair."""
+    user message, never inside a tool-call / tool-result pair."""
     with conn() as c:
-        starts = c.execute(
-            "SELECT id FROM chat WHERE role='user' AND substr(content,1,1)='\"' ORDER BY id DESC LIMIT ?",
-            (turns,)).fetchall()
+        starts = c.execute("SELECT id FROM chat WHERE role='user' ORDER BY id DESC LIMIT ?",
+                           (turns,)).fetchall()
         if not starts:
             return []
-        rows = c.execute("SELECT role, content FROM chat WHERE id>=? ORDER BY id",
-                         (starts[-1]["id"],)).fetchall()
-    return [{"role": r["role"], "content": json.loads(r["content"])} for r in rows]
+        rows = c.execute("SELECT content FROM chat WHERE id>=? ORDER BY id", (starts[-1]["id"],)).fetchall()
+    return [json.loads(r["content"]) for r in rows]
 
 
 def clear_chat() -> None:

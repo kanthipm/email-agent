@@ -39,8 +39,8 @@ def process_email(p: MailProvider, email: EmailMessage) -> dict | None:
     text = llm.new_email_text(draft, email, verdict["summary"])
     sms.send_text(text)
     store.mark_shown(draft["id"])
-    store.append_chat("user", f"[event] New email arrived; you texted the user draft #{draft['id']}.")
-    store.append_chat("assistant", text)
+    store.append_chat({"role": "user", "content": f"[event] New email arrived; you texted the user draft #{draft['id']}."})
+    store.append_chat({"role": "assistant", "content": text})
     return draft
 
 
@@ -73,8 +73,18 @@ def poll_once() -> int:
     return sent
 
 
+def quiet_hours(now: datetime | None = None) -> bool:
+    """True inside the local do-not-scan window, e.g. 22:00 to 07:00."""
+    h = (now or datetime.now()).hour
+    start, end = config.QUIET_START_HOUR, config.QUIET_END_HOUR
+    return start <= h or h < end if start > end else start <= h < end
+
+
 def run_forever(stop: threading.Event) -> None:
     while not stop.is_set():
+        if quiet_hours():
+            stop.wait(300)
+            continue
         try:
             poll_once()
         except Exception:

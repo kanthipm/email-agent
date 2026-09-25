@@ -3,7 +3,7 @@ after the exact current version has been shown to the user."""
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+import json
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["DB_PATH"] = "test_agent_flow.db"
@@ -41,24 +41,20 @@ class FakeProvider:
         return "sent-1"
 
 
-class Block(SimpleNamespace):
-    def model_dump(self, exclude_none=True):
-        return {k: v for k, v in vars(self).items()}
-
-
 def text_resp(text):
-    return SimpleNamespace(stop_reason="end_turn", content=[Block(type="text", text=text)])
+    return {"role": "assistant", "content": text}
 
 
 def tool_resp(name, inp, text=""):
-    blocks = ([Block(type="text", text=text)] if text else []) + [Block(type="tool_use", id="tu1", name=name, input=inp)]
-    return SimpleNamespace(stop_reason="tool_use", content=blocks)
+    return {"role": "assistant", "content": text,
+            "tool_calls": [{"id": "call1", "type": "function",
+                            "function": {"name": name, "arguments": json.dumps(inp)}}]}
 
 
 def run(script):
-    """script: list of responses Claude would give, in order."""
+    """script: list of assistant messages Groq would return, in order."""
     it = iter(script)
-    llm._call = lambda **kw: next(it)
+    llm._chat = lambda messages, **kw: next(it)
     return llm.handle_sms("hi")
 
 
@@ -104,3 +100,13 @@ def test_flow():
     # history window never starts mid tool-call
     hist = store.recent_chat(2)
     assert hist and hist[0]["role"] == "user" and isinstance(hist[0]["content"], str)
+    assert all(m["role"] in ("user", "assistant", "tool") for m in hist)
+
+
+def test_quiet_hours():
+    from datetime import datetime
+    from app import poller
+    assert poller.quiet_hours(datetime(2026, 9, 25, 23, 0))
+    assert poller.quiet_hours(datetime(2026, 9, 25, 3, 0))
+    assert not poller.quiet_hours(datetime(2026, 9, 25, 7, 0))
+    assert not poller.quiet_hours(datetime(2026, 9, 25, 21, 59))

@@ -10,8 +10,8 @@ def _bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 SENDBLUE_API_KEY = os.getenv("SENDBLUE_API_KEY", "")
 SENDBLUE_API_SECRET = os.getenv("SENDBLUE_API_SECRET", "")
@@ -31,6 +31,8 @@ GMAIL_CLIENT_SECRET = CREDENTIALS_DIR / "gmail_client_secret.json"
 GMAIL_TOKEN = CREDENTIALS_DIR / "gmail.token.json"
 OUTLOOK_TOKEN = CREDENTIALS_DIR / "outlook.token.json"
 
-POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
+POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "1800"))
+QUIET_START_HOUR = int(os.getenv("QUIET_START_HOUR", "22"))
+QUIET_END_HOUR = int(os.getenv("QUIET_END_HOUR", "7"))
 DB_PATH = ROOT / os.getenv("DB_PATH", "agent.db")
 PORT = int(os.getenv("PORT", "8000"))
