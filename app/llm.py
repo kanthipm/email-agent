@@ -33,16 +33,31 @@ def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: b
     if json_mode:
         body["response_format"] = {"type": "json_object"}
     headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
-    for attempt in range(2):
+    for attempt in range(6):
         r = httpx.post(f"{BASE_URL}/chat/completions", json=body, headers=headers, timeout=90.0)
-        if r.status_code == 429 or r.status_code >= 500:
-            if attempt == 0:
-                time.sleep(float(r.headers.get("retry-after", "3")))
-                continue
+        if (r.status_code == 429 or r.status_code >= 500) and attempt < 5:
+            wait = _retry_after(r)
+            log.warning("Groq %s, retrying in %.1fs", r.status_code, wait)
+            time.sleep(wait)
+            continue
         if r.status_code >= 400:
             raise RuntimeError(f"Groq {r.status_code}: {r.text[:300]}")
         return r.json()["choices"][0]["message"]
     raise RuntimeError("Groq unavailable")
+
+
+_WAIT_RE = re.compile(r"try again in (?:(\d+)m)?(?:([\d.]+)s|([\d.]+)ms)")
+
+
+def _retry_after(r: httpx.Response) -> float:
+    """Seconds to wait, from the Retry-After header or Groq's 'try again in 1m2.5s' text."""
+    if r.headers.get("retry-after"):
+        return min(float(r.headers["retry-after"]), 60.0) + 0.5
+    m = _WAIT_RE.search(r.text)
+    if m:
+        mins, secs, ms = m.groups()
+        return min(int(mins or 0) * 60 + float(secs or 0) + float(ms or 0) / 1000, 60.0) + 0.5
+    return 5.0
 
 
 def _me() -> str:
@@ -296,7 +311,7 @@ _HANDLERS = {
 
 AGENT_RULES = """
 ## Working over text message
-- You are talking to the user by SMS. Be brief: a sentence or two plus the draft when one changed.
+- You are talking to the user by SMS. Be brief: a sentence or two plus the draft when one changed. Plain text only: no markdown, no **bold**, no bullet symbols; use short lines instead.
 - Drafts live in a store and are referenced as #id. "Send", "send it", "looks good, go", "yes" after a draft was shown means send_draft on the draft under discussion (usually the most recent one you showed).
 - Never send anything the user has not approved. When you create or change a draft, paste the FULL draft text verbatim in your reply and ask them to confirm. If they ask for changes and to send in the same message, make the changes, show the result, and ask for confirmation instead of sending.
 - After a change, show only the updated draft, not a summary of the edit.
