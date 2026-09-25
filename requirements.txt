@@ -1,0 +1,10 @@
+anthropic>=1.8
+google-api-python-client
+google-auth-oauthlib
+msal
+httpx
+fastapi
+uvicorn[standard]
+python-dotenv
+python-multipart
+pydantic
