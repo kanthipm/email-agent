@@ -22,6 +22,8 @@ MY_PHONE = os.getenv("MY_PHONE", "")
 MY_NAME = os.getenv("MY_NAME", "")
 
 GMAIL_ENABLED = _bool("GMAIL_ENABLED", True)
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID", "")
+GMAIL_CLIENT_SECRET_VALUE = os.getenv("GMAIL_CLIENT_SECRET", "")
 OUTLOOK_ENABLED = _bool("OUTLOOK_ENABLED", True)
 OUTLOOK_CLIENT_ID = os.getenv("OUTLOOK_CLIENT_ID", "")
 OUTLOOK_TENANT = os.getenv("OUTLOOK_TENANT", "common")

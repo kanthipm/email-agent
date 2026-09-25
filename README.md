@@ -25,7 +25,8 @@ cd email-agent
 
 1. **Keys**: fill in `MY_NAME` in `.env`. Groq and Sendblue keys are already copied from medpull-ortho.
 2. **Gmail**: in Google Cloud Console create a project, enable the Gmail API, create an OAuth client of
-   type Desktop, download the JSON to `credentials/gmail_client_secret.json`, then:
+   type Desktop, and either download the JSON to `credentials/gmail_client_secret.json` or paste the
+   client ID and secret into `.env` as `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET`, then:
    ```powershell
    python scripts\auth_gmail.py
    ```

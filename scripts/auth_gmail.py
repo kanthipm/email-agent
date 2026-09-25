@@ -13,20 +13,32 @@ from app import config
 from app.mail.gmail import SCOPES
 
 
+def _flow() -> InstalledAppFlow | None:
+    if config.GMAIL_CLIENT_SECRET.exists():
+        return InstalledAppFlow.from_client_secrets_file(str(config.GMAIL_CLIENT_SECRET), SCOPES)
+    if config.GMAIL_CLIENT_ID and config.GMAIL_CLIENT_SECRET_VALUE:
+        return InstalledAppFlow.from_client_config({"installed": {
+            "client_id": config.GMAIL_CLIENT_ID,
+            "client_secret": config.GMAIL_CLIENT_SECRET_VALUE,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost"],
+        }}, SCOPES)
+    return None
+
+
 def main() -> int:
-    if not config.GMAIL_CLIENT_SECRET.exists():
+    flow = _flow()
+    if flow is None:
         print(
-            f"Missing {config.GMAIL_CLIENT_SECRET}\n\n"
-            "Create an OAuth client in Google Cloud Console:\n"
-            "  1. Enable the Gmail API for your project.\n"
-            "  2. APIs & Services -> Credentials -> Create credentials -> OAuth client ID -> Desktop app.\n"
-            "  3. Download the JSON and save it as credentials/gmail_client_secret.json.\n"
+            "No Gmail OAuth client configured. Either:\n"
+            f"  a) download the client JSON from Google Cloud Console to {config.GMAIL_CLIENT_SECRET}, or\n"
+            "  b) put GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in .env (Credentials -> your Desktop client).\n"
             "Then rerun: python scripts/auth_gmail.py",
             file=sys.stderr,
         )
         return 1
 
-    flow = InstalledAppFlow.from_client_secrets_file(str(config.GMAIL_CLIENT_SECRET), SCOPES)
     creds = flow.run_local_server(port=0)
     config.CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
     config.GMAIL_TOKEN.write_text(creds.to_json())
