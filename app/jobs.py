@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta
 
 import httpx
 
-from app import config, llm, store
+from app import config, llm, resume, store
 from app.mail import providers
 
 log = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ BATCH = 20
 
 def _score_batch(batch: list[Job], today: date) -> dict[int, tuple[int, str]]:
     """Ask the model for a 0-5 priority per posting. 0 means not a new-grad role at all."""
-    profile = config.JOBS_PROFILE or "a new grad looking for product management and software engineering roles"
+    profile = resume.profile()
     listing = "\n".join(f"{i}. [{j.track}] {j.company} — {j.title} — {j.location}" for i, j in enumerate(batch, 1))
     prompt = (
         f"Rate new-grad job postings for {config.MY_NAME or 'the user'}, {profile}. Today is {today.isoformat()}.\n"

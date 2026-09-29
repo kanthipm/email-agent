@@ -20,7 +20,8 @@ figures out who and what from your past mail.
   web search, has the model pick the top priorities, and emails the list from your Gmail to yourself.
   `JOBS_STRICT_NEW_GRAD=true` (default) drops any scraped posting whose title does not say new grad,
   entry level, graduate, APM, junior, 2026/2027, or similar, and anything with senior/staff/lead/II+ in it.
-  Fill in `JOBS_PROFILE` in `.env` so the ranking knows what you want. `python scripts\jobs_digest.py`
+  Put your resume at `credentials/resume.pdf` (or set `RESUME_PATH`); it is summarized into a profile
+  the ranking and the email drafter use. `JOBS_PROFILE` overrides that summary if set. `python scripts\jobs_digest.py`
   previews it; add `--send` to email it now.
 - State lives in `agent.db` (SQLite): processed emails, drafts, and the SMS conversation.
 
@@ -112,6 +113,7 @@ app/mail/base.py   EmailMessage / Contact / MailProvider interface
 app/mail/gmail.py  Gmail API provider
 app/mail/outlook.py Microsoft Graph provider
 app/llm.py         groq: triage + drafting, SMS agent loop with tools
+app/resume.py      resume -> profile summary
 app/poller.py      inbox scan loop
 app/jobs.py        daily new-grad job digest
 app/server.py      fastapi: webhook, health, background threads

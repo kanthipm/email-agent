@@ -112,6 +112,15 @@ def style_samples(force: bool = False) -> str:
     return text
 
 
+def _bio() -> str:
+    from app import resume
+    try:
+        return resume.profile()
+    except Exception as e:  # a model hiccup must not block the conversation
+        log.warning("resume profile unavailable: %s", e)
+        return config.JOBS_PROFILE or "(no profile)"
+
+
 def _accounts_line() -> str:
     return ", ".join(f"{n} <{p.address}>" for n, p in providers().items()) or "(none configured)"
 
@@ -120,7 +129,8 @@ def _persona() -> str:
     return (
         f"You are the personal email assistant of {_me()}. You write emails in their voice and manage "
         f"them with them over text message.\n"
-        f"Email accounts: {_accounts_line()}\n\n"
+        f"Email accounts: {_accounts_line()}\n"
+        f"About them: {_bio()}\n\n"
         f"## How {_me()} writes (their recent sent emails)\n{style_samples()}\n\n"
         "Match their greeting and sign-off habits, sentence length, formality, and punctuation. "
         "Never invent facts, dates, prices, commitments, or details only they would know; leave a short "
