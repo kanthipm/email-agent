@@ -63,6 +63,7 @@ def test_flow():
     fake = FakeProvider()
     mail._providers = {"gmail": fake}
     store.set_kv("style_samples", {"at": 9e12, "text": "sample"})
+    config.JOBS_PROFILE = "test profile"          # keep resume.profile() from calling the model
 
     d = store.create_draft(account="gmail", to_addrs=["jane@x.com"], subject="Re: Lunch?", body="Sure, Thursday works.",
                            source="inbound", reply_to_message_id="m1", thread_id="t1")
