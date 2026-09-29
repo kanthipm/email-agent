@@ -34,15 +34,16 @@ cd email-agent
 1. **Keys**: fill in `MY_NAME` in `.env`. Sendblue and Groq keys are already copied from medpull-ortho.
    The model runs on any OpenAI-compatible API, chosen with `LLM_PROVIDER` + `LLM_API_KEY`:
 
-   | provider | free tier | get a key | notes |
+   | provider | free tier (as of Sep 2026) | get a key | notes |
    |---|---|---|---|
-   | `gemini` | 2.5 Flash: ~250 requests/day, 250k tokens/min | https://aistudio.google.com/apikey | most headroom; Google may train on free-tier data |
-   | `groq` | 200k tokens/day per model | https://console.groq.com | default; also powers the digest's web search |
+   | `gemini` | 3.8 Flash: 20 requests/day; 3.5 Flash-Lite: much more | https://aistudio.google.com/apikey | Google may train on free-tier data |
+   | `groq` | 200k tokens/day per model | https://console.groq.com | also powers the digest's web search |
    | `cerebras` | 1M tokens/day | https://cloud.cerebras.ai | same gpt-oss-120b model as Groq |
    | `openrouter` | 50 requests/day on `:free` models | https://openrouter.ai | too small for daily triage |
 
-   A day of email triage is roughly 150k tokens, so Groq's free tier runs out most days. Gemini or
-   Cerebras free tiers do not. Set `LLM_PROVIDER=gemini` and paste the key into `LLM_API_KEY`.
+   Every provider with a key is used: the agent tries the chosen provider's main model, then its fallback,
+   then the other providers, moving down only when a daily quota is exhausted. A day of email triage is
+   roughly 150k tokens, so quotas from two or three free providers together are what keeps it running.
 2. **Gmail**: in Google Cloud Console create a project, enable the Gmail API, create an OAuth client of
    type Desktop, and either download the JSON to `credentials/gmail_client_secret.json` or paste the
    client ID and secret into `.env` as `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET`, then:
