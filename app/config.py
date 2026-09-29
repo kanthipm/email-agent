@@ -10,9 +10,23 @@ def _bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b")
+# Any OpenAI-compatible chat API. Presets: (base_url, default model, default fallback model, key env var)
+LLM_PRESETS = {
+    "groq": ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "GROQ_API_KEY"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash",
+               "gemini-2.5-flash-lite", "GEMINI_API_KEY"),
+    "cerebras": ("https://api.cerebras.ai/v1", "gpt-oss-120b", "llama-3.3-70b", "CEREBRAS_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1", "openai/gpt-oss-120b:free",
+                   "meta-llama/llama-3.3-70b-instruct:free", "OPENROUTER_API_KEY"),
+}
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+_preset = LLM_PRESETS.get(LLM_PROVIDER, LLM_PRESETS["groq"])
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", _preset[0]).rstrip("/")
+LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("GROQ_MODEL", _preset[1])
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL") or os.getenv("GROQ_FALLBACK_MODEL", _preset[2])
+LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv(_preset[3], "")
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")   # still used for the job digest's web search (Groq-only tool)
 
 SENDBLUE_API_KEY = os.getenv("SENDBLUE_API_KEY", "")
 SENDBLUE_API_SECRET = os.getenv("SENDBLUE_API_SECRET", "")
@@ -42,6 +56,7 @@ JOBS_DIGEST_HOUR = int(os.getenv("JOBS_DIGEST_HOUR", "8"))
 JOBS_DIGEST_TO = os.getenv("JOBS_DIGEST_TO", "")
 JOBS_PROFILE = os.getenv("JOBS_PROFILE", "")
 JOBS_WEB_SEARCH = _bool("JOBS_WEB_SEARCH", True)
+JOBS_STRICT_NEW_GRAD = _bool("JOBS_STRICT_NEW_GRAD", True)
 JOBS_SEARCH_MODEL = os.getenv("JOBS_SEARCH_MODEL", "openai/gpt-oss-20b")
 
 DB_PATH = ROOT / os.getenv("DB_PATH", "agent.db")

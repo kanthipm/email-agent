@@ -7,7 +7,8 @@ figures out who and what from your past mail.
 
 ## How it works
 
-- **Poller** scans each inbox every 30 minutes, never between 10pm and 7am local time (`QUIET_START_HOUR` / `QUIET_END_HOUR`). Overnight mail is picked up at 7am. Groq (`openai/gpt-oss-120b`, same as medpull-ortho) decides whether a human reply is expected
+- **Poller** scans each inbox every 30 minutes, never between 10pm and 7am local time (`QUIET_START_HOUR` /
+  `QUIET_END_HOUR`). Overnight mail is picked up at 7am. The model decides whether a human reply is expected
   (newsletters, receipts, notifications, FYI threads are skipped) and drafts one in your style.
 - **SMS** goes over Sendblue (iMessage/SMS). Only texts from `MY_PHONE` are accepted.
 - **Approval gate**: a draft carries a version number. Every edit bumps it. `send_draft` refuses unless
@@ -17,6 +18,8 @@ figures out who and what from your past mail.
 - **Morning job digest**: at `JOBS_DIGEST_HOUR` (default 8am) it collects the day's new-grad Software
   Engineer and Product Manager postings from the SimplifyJobs and Jobright feeds, optionally adds a capped
   web search, has the model pick the top priorities, and emails the list from your Gmail to yourself.
+  `JOBS_STRICT_NEW_GRAD=true` (default) drops any scraped posting whose title does not say new grad,
+  entry level, graduate, APM, junior, 2026/2027, or similar, and anything with senior/staff/lead/II+ in it.
   Fill in `JOBS_PROFILE` in `.env` so the ranking knows what you want. `python scripts\jobs_digest.py`
   previews it; add `--send` to email it now.
 - State lives in `agent.db` (SQLite): processed emails, drafts, and the SMS conversation.
@@ -28,7 +31,18 @@ cd email-agent
 .venv\Scripts\activate          # already created; or: python -m venv .venv && pip install -r requirements.txt
 ```
 
-1. **Keys**: fill in `MY_NAME` in `.env`. Groq and Sendblue keys are already copied from medpull-ortho.
+1. **Keys**: fill in `MY_NAME` in `.env`. Sendblue and Groq keys are already copied from medpull-ortho.
+   The model runs on any OpenAI-compatible API, chosen with `LLM_PROVIDER` + `LLM_API_KEY`:
+
+   | provider | free tier | get a key | notes |
+   |---|---|---|---|
+   | `gemini` | 2.5 Flash: ~250 requests/day, 250k tokens/min | https://aistudio.google.com/apikey | most headroom; Google may train on free-tier data |
+   | `groq` | 200k tokens/day per model | https://console.groq.com | default; also powers the digest's web search |
+   | `cerebras` | 1M tokens/day | https://cloud.cerebras.ai | same gpt-oss-120b model as Groq |
+   | `openrouter` | 50 requests/day on `:free` models | https://openrouter.ai | too small for daily triage |
+
+   A day of email triage is roughly 150k tokens, so Groq's free tier runs out most days. Gemini or
+   Cerebras free tiers do not. Set `LLM_PROVIDER=gemini` and paste the key into `LLM_API_KEY`.
 2. **Gmail**: in Google Cloud Console create a project, enable the Gmail API, create an OAuth client of
    type Desktop, and either download the JSON to `credentials/gmail_client_secret.json` or paste the
    client ID and secret into `.env` as `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET`, then:

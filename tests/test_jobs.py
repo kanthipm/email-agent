@@ -35,6 +35,7 @@ def test_jobright_parse(monkeypatch):
 
 
 def test_dedupe(monkeypatch):
+    monkeypatch.setattr(jobs.config, "JOBS_STRICT_NEW_GRAD", False)
     monkeypatch.setattr(jobs, "_simplify", lambda since: [jobs.Job("PM", "Acme", "APM", "u1", "NYC", "2026-09-28", "simplify")])
     monkeypatch.setattr(jobs, "_jobright", lambda *a: [jobs.Job("PM", "ACME", "APM!", "u2", "NYC", "2026-09-28", "jobright"),
                                                        jobs.Job("SWE", "Beta", "SWE I", "u3", "SF", "2026-09-28", "jobright")])
@@ -51,3 +52,17 @@ def test_render_orders_and_drops():
     assert body.index("TOP PRIORITY") < body.index("u1") < body.index("ALSO NEW TODAY: SOFTWARE") < body.index("u2")
     assert "u3" not in body and "1 non-new-grad postings dropped" in body
     assert "ALSO NEW TODAY: PRODUCT" not in body   # the only PM posting is already in top
+
+
+def test_strict_new_grad_gate():
+    J = lambda title, src="jobright": jobs.Job("SWE", "X", title, "u", "", "2026-09-28", src)
+    assert jobs.is_new_grad(J("Software Engineer, New Grad"))
+    assert jobs.is_new_grad(J("Entry Level Technical Product Manager - Austin, TX - 2027"))
+    assert jobs.is_new_grad(J("Software Engineer I / II"))
+    assert jobs.is_new_grad(J("Associate Product Manager"))
+    assert jobs.is_new_grad(J("Software Engineer", "simplify"))          # curated feed trusted
+    assert not jobs.is_new_grad(J("Software Engineer"))                  # scraped, no signal
+    assert jobs.is_new_grad(J("Senior Software Engineer, New Grad Team"))   # explicit phrase wins
+    assert not jobs.is_new_grad(J("Software Engineer II"))
+    assert not jobs.is_new_grad(J("Product Strategy Analyst III"))
+    assert not jobs.is_new_grad(J("Staff Engineer", "simplify"))         # seniority beats trust

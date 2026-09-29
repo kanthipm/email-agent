@@ -1,4 +1,4 @@
-"""LLM layer (Groq, OpenAI-compatible chat API): triage inbound mail, draft replies in the
+"""LLM layer (any OpenAI-compatible chat API; provider chosen in config): triage inbound mail, draft replies in the
 user's voice, and run the SMS conversation (edit / create / send drafts, look up past mail)."""
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from app.mail import get as get_provider, providers
 from app.mail.base import EmailMessage
 
 log = logging.getLogger(__name__)
-BASE_URL = "https://api.groq.com/openai/v1"
 MAX_TOOL_ROUNDS = 12
 STYLE_TTL_S = 24 * 3600
 
@@ -23,10 +22,10 @@ STYLE_TTL_S = 24 * 3600
 def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: bool = False,
           max_tokens: int = 4000, temperature: float = 0.4, model: str | None = None) -> dict:
     """One chat completion. Returns the assistant message dict. Waits out per-minute limits;
-    on a per-day limit switches to GROQ_FALLBACK_MODEL (separate quota) once."""
-    if not config.GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY is not set")
-    model = model or config.GROQ_MODEL
+    on a per-day limit switches to LLM_FALLBACK_MODEL (separate quota) once."""
+    if not config.LLM_API_KEY:
+        raise RuntimeError(f"No API key for LLM_PROVIDER={config.LLM_PROVIDER}; set LLM_API_KEY in .env")
+    model = model or config.LLM_MODEL
     body: dict[str, Any] = {"model": model, "messages": messages,
                             "max_tokens": max_tokens, "temperature": temperature}
     if tools:
@@ -34,25 +33,25 @@ def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: b
         body["tool_choice"] = "auto"
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
+    headers = {"Authorization": f"Bearer {config.LLM_API_KEY}"}
     for attempt in range(6):
-        r = httpx.post(f"{BASE_URL}/chat/completions", json=body, headers=headers, timeout=90.0)
-        if r.status_code == 429 and "per day" in r.text:
-            fallback = config.GROQ_FALLBACK_MODEL
+        r = httpx.post(f"{config.LLM_BASE_URL}/chat/completions", json=body, headers=headers, timeout=90.0)
+        if r.status_code == 429 and re.search(r"per ?day|daily|PerDay", r.text):
+            fallback = config.LLM_FALLBACK_MODEL
             if fallback and fallback != model:
-                log.warning("Groq daily cap on %s; using %s for this call", model, fallback)
+                log.warning("daily cap on %s; using %s for this call", model, fallback)
                 return _chat(messages, tools=tools, json_mode=json_mode, max_tokens=max_tokens,
                              temperature=temperature, model=fallback)
-            raise RuntimeError(f"Groq daily token limit reached for {model}: {r.text[:200]}")
+            raise RuntimeError(f"Daily limit reached for {model}: {r.text[:200]}")
         if (r.status_code == 429 or r.status_code >= 500) and attempt < 5:
             wait = _retry_after(r)
-            log.warning("Groq %s, retrying in %.1fs", r.status_code, wait)
+            log.warning("LLM %s, retrying in %.1fs", r.status_code, wait)
             time.sleep(wait)
             continue
         if r.status_code >= 400:
-            raise RuntimeError(f"Groq {r.status_code}: {r.text[:300]}")
+            raise RuntimeError(f"LLM {r.status_code}: {r.text[:300]}")
         return r.json()["choices"][0]["message"]
-    raise RuntimeError("Groq unavailable")
+    raise RuntimeError("LLM unavailable")
 
 
 _WAIT_RE = re.compile(r"try again in (?:(\d+)m)?(?:([\d.]+)s|([\d.]+)ms)")

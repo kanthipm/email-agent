@@ -93,9 +93,11 @@ def _web_search(today: date) -> list[Job]:
               "Software Engineer and Product Manager / APM job postings in the US published in the last 24 hours. "
               "Reply with ONLY a JSON array of objects with keys company, title, url, location, track "
               '("SWE" or "PM"). Only include postings whose URL you actually saw. Up to 8 items.')
+    if not config.GROQ_API_KEY:
+        return []          # browser_search is a Groq-only tool
     body = {"model": config.JOBS_SEARCH_MODEL, "messages": [{"role": "user", "content": prompt}],
             "tools": [{"type": "browser_search"}], "max_tokens": 4000}
-    r = httpx.post(f"{llm.BASE_URL}/chat/completions", json=body, timeout=180,
+    r = httpx.post("https://api.groq.com/openai/v1/chat/completions", json=body, timeout=180,
                    headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"})
     if r.status_code >= 400:
         log.warning("web search skipped: Groq %s", r.status_code)
@@ -126,14 +128,41 @@ def collect(since: date, today: date, web: bool = True) -> list[Job]:
             jobs += _web_search(today)
         except Exception as e:
             log.warning("web search failed: %s", e)
-    seen, out = set(), []
+    seen, out, dropped = set(), [], 0
     for j in jobs:
         key = (j.company.lower(), re.sub(r"\W+", " ", j.title.lower()).strip())
         if key in seen or not j.url:
             continue
         seen.add(key)
+        if config.JOBS_STRICT_NEW_GRAD and not is_new_grad(j):
+            dropped += 1
+            continue
         out.append(j)
+    if dropped:
+        log.info("strict new-grad filter dropped %d postings", dropped)
     return out
+
+
+# ---------------------------------------------------------------- strict new-grad filter
+_NEW_GRAD = re.compile(
+    r"new ?grad|graduate|entry[- ]level|early[- ]career|early[- ]talent|associate product manager|\bapm\b|"
+    r"university|campus|rotational|\b20(26|27)\b|junior|\bjr\.?\b|\b(engineer|developer|analyst|scientist)\s+(i|1)\b|"
+    r"\banalyst\b|\bprogram\b|fellow|trainee|\bco-?op\b|\bintern", re.I)
+_SENIOR = re.compile(
+    r"\bsenior\b|\bsr\.?\b|\bstaff\b|principal|\blead\b|director|\bhead of\b|\bvp\b|vice president|architect|"
+    r"experienced|mid[- ]level|\b(iii|iv)\b|\b[3-9]\+?\s*years?\b", re.I)
+_EXPLICIT = re.compile(r"new ?grad|entry[- ]level|graduate|early[- ]career", re.I)
+
+
+def is_new_grad(job: Job) -> bool:
+    """Title-level gate: seniority words disqualify unless the title says new-grad outright;
+    scraped sources must carry a new-grad signal, the curated Simplify feed is trusted as-is."""
+    t = job.title
+    senior = bool(_SENIOR.search(t)) or (bool(re.search(r"\bII\b", t)) and not re.search(r"\bI\b", t))
+    if senior and not _EXPLICIT.search(t):
+        return False
+    return bool(_NEW_GRAD.search(t)) or job.source == "simplify"
+
 
 
 # ---------------------------------------------------------------- ranking + email
@@ -146,7 +175,8 @@ def _score_batch(batch: list[Job], today: date) -> dict[int, tuple[int, str]]:
     listing = "\n".join(f"{i}. [{j.track}] {j.company} — {j.title} — {j.location}" for i, j in enumerate(batch, 1))
     prompt = (
         f"Rate new-grad job postings for {config.MY_NAME or 'the user'}, {profile}. Today is {today.isoformat()}.\n"
-        "Score each 0-5: 5 = apply today (strong company, true new-grad/APM/early-career role, good fit); "
+        "Every posting MUST be a genuine new-grad / entry-level role (0-2 years, 2026-2027 grads). "
+        "Score each 0-5: 5 = apply today (strong company, unmistakably new-grad/APM/early-career, good fit); "
         "3 = worth a look; 1 = weak fit; 0 = not a new-grad role (senior, staff, manager of managers, 5+ years) "
         "or not a software/tech product role (retail merchandising, fashion or consumer-goods 'product' jobs, "
         "non-technical coordinator roles).\n"
