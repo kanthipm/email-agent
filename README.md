@@ -14,6 +14,11 @@ figures out who and what from your past mail.
   the exact current version was shown to you in a text. "Shorten it and send" therefore shows you the
   new text and asks again instead of sending.
 - **Style**: your last dozen sent emails from each account are fed to the model as examples.
+- **Morning job digest**: at `JOBS_DIGEST_HOUR` (default 8am) it collects the day's new-grad Software
+  Engineer and Product Manager postings from the SimplifyJobs and Jobright feeds, optionally adds a capped
+  web search, has the model pick the top priorities, and emails the list from your Gmail to yourself.
+  Fill in `JOBS_PROFILE` in `.env` so the ranking knows what you want. `python scripts\jobs_digest.py`
+  previews it; add `--send` to email it now.
 - State lives in `agent.db` (SQLite): processed emails, drafts, and the SMS conversation.
 
 ## Setup
@@ -93,6 +98,7 @@ app/mail/gmail.py  Gmail API provider
 app/mail/outlook.py Microsoft Graph provider
 app/llm.py         groq: triage + drafting, SMS agent loop with tools
 app/poller.py      inbox scan loop
+app/jobs.py        daily new-grad job digest
 app/server.py      fastapi: webhook, health, background threads
 tests/             offline tests (pytest)
 ```

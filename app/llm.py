@@ -21,11 +21,13 @@ STYLE_TTL_S = 24 * 3600
 
 
 def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: bool = False,
-          max_tokens: int = 4000, temperature: float = 0.4) -> dict:
-    """One chat completion. Returns the assistant message dict. Retries once on 429/5xx."""
+          max_tokens: int = 4000, temperature: float = 0.4, model: str | None = None) -> dict:
+    """One chat completion. Returns the assistant message dict. Waits out per-minute limits;
+    on a per-day limit switches to GROQ_FALLBACK_MODEL (separate quota) once."""
     if not config.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not set")
-    body: dict[str, Any] = {"model": config.GROQ_MODEL, "messages": messages,
+    model = model or config.GROQ_MODEL
+    body: dict[str, Any] = {"model": model, "messages": messages,
                             "max_tokens": max_tokens, "temperature": temperature}
     if tools:
         body["tools"] = tools
@@ -35,6 +37,13 @@ def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: b
     headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
     for attempt in range(6):
         r = httpx.post(f"{BASE_URL}/chat/completions", json=body, headers=headers, timeout=90.0)
+        if r.status_code == 429 and "per day" in r.text:
+            fallback = config.GROQ_FALLBACK_MODEL
+            if fallback and fallback != model:
+                log.warning("Groq daily cap on %s; using %s for this call", model, fallback)
+                return _chat(messages, tools=tools, json_mode=json_mode, max_tokens=max_tokens,
+                             temperature=temperature, model=fallback)
+            raise RuntimeError(f"Groq daily token limit reached for {model}: {r.text[:200]}")
         if (r.status_code == 429 or r.status_code >= 500) and attempt < 5:
             wait = _retry_after(r)
             log.warning("Groq %s, retrying in %.1fs", r.status_code, wait)

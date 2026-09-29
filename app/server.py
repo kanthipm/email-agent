@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Request
 
-from app import config, llm, poller, sms, store
+from app import config, jobs, llm, poller, sms, store
 from app.mail import providers
 
 log = logging.getLogger(__name__)
@@ -41,7 +41,8 @@ async def lifespan(_: FastAPI):
     store.init()
     log.info("mail accounts: %s", list(providers()) or "none")
     threads = [threading.Thread(target=_sms_worker, daemon=True, name="sms-worker"),
-               threading.Thread(target=poller.run_forever, args=(_stop,), daemon=True, name="poller")]
+               threading.Thread(target=poller.run_forever, args=(_stop,), daemon=True, name="poller"),
+               threading.Thread(target=jobs.run_forever, args=(_stop,), daemon=True, name="jobs-digest")]
     for t in threads:
         t.start()
     yield

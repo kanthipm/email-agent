@@ -12,6 +12,7 @@ def _bool(name: str, default: bool = False) -> bool:
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b")
 
 SENDBLUE_API_KEY = os.getenv("SENDBLUE_API_KEY", "")
 SENDBLUE_API_SECRET = os.getenv("SENDBLUE_API_SECRET", "")
@@ -36,5 +37,12 @@ OUTLOOK_TOKEN = CREDENTIALS_DIR / "outlook.token.json"
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "1800"))
 QUIET_START_HOUR = int(os.getenv("QUIET_START_HOUR", "22"))
 QUIET_END_HOUR = int(os.getenv("QUIET_END_HOUR", "7"))
+JOBS_DIGEST_ENABLED = _bool("JOBS_DIGEST_ENABLED", True)
+JOBS_DIGEST_HOUR = int(os.getenv("JOBS_DIGEST_HOUR", "8"))
+JOBS_DIGEST_TO = os.getenv("JOBS_DIGEST_TO", "")
+JOBS_PROFILE = os.getenv("JOBS_PROFILE", "")
+JOBS_WEB_SEARCH = _bool("JOBS_WEB_SEARCH", True)
+JOBS_SEARCH_MODEL = os.getenv("JOBS_SEARCH_MODEL", "openai/gpt-oss-20b")
+
 DB_PATH = ROOT / os.getenv("DB_PATH", "agent.db")
 PORT = int(os.getenv("PORT", "8000"))
