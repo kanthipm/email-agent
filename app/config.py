@@ -13,8 +13,8 @@ def _bool(name: str, default: bool = False) -> bool:
 # Any OpenAI-compatible chat API. Presets: (base_url, default model, default fallback model, key env var)
 LLM_PRESETS = {
     "groq": ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "GROQ_API_KEY"),
-    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash",
-               "gemini-2.5-flash-lite", "GEMINI_API_KEY"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash",
+               "gemini-3.5-flash-lite", "GEMINI_API_KEY"),
     "cerebras": ("https://api.cerebras.ai/v1", "gpt-oss-120b", "llama-3.3-70b", "CEREBRAS_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1", "openai/gpt-oss-120b:free",
                    "meta-llama/llama-3.3-70b-instruct:free", "OPENROUTER_API_KEY"),
@@ -25,6 +25,20 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", _preset[0]).rstrip("/")
 LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("GROQ_MODEL", _preset[1])
 LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL") or os.getenv("GROQ_FALLBACK_MODEL", _preset[2])
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv(_preset[3], "")
+
+
+def _chain() -> list[tuple[str, str, str]]:
+    """(base_url, api_key, model) entries tried in order when a model's daily quota is exhausted:
+    the chosen provider's main and fallback models, then every other provider that has a key."""
+    out = [(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL), (LLM_BASE_URL, LLM_API_KEY, LLM_FALLBACK_MODEL)]
+    for name, (url, main, fallback, key_env) in LLM_PRESETS.items():
+        key = os.getenv(key_env, "")
+        if name != LLM_PROVIDER and key:
+            out += [(url, key, main), (url, key, fallback)]
+    return [e for i, e in enumerate(out) if e[1] and e[2] and e not in out[:i]]
+
+
+LLM_CHAIN = _chain()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")   # still used for the job digest's web search (Groq-only tool)
 

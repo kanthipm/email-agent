@@ -19,39 +19,48 @@ MAX_TOOL_ROUNDS = 12
 STYLE_TTL_S = 24 * 3600
 
 
+_DAILY_RE = re.compile(r"per ?day|daily|PerDay")
+_exhausted: dict[tuple[str, str], str] = {}   # (base_url, model) -> local date its daily quota ran out
+
+
 def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: bool = False,
           max_tokens: int = 4000, temperature: float = 0.4, model: str | None = None) -> dict:
-    """One chat completion. Returns the assistant message dict. Waits out per-minute limits;
-    on a per-day limit switches to LLM_FALLBACK_MODEL (separate quota) once."""
-    if not config.LLM_API_KEY:
+    """One chat completion; returns the assistant message dict. Walks config.LLM_CHAIN: waits out
+    per-minute limits, and moves to the next model/provider when a daily quota is exhausted."""
+    if not config.LLM_CHAIN:
         raise RuntimeError(f"No API key for LLM_PROVIDER={config.LLM_PROVIDER}; set LLM_API_KEY in .env")
-    model = model or config.LLM_MODEL
-    body: dict[str, Any] = {"model": model, "messages": messages,
-                            "max_tokens": max_tokens, "temperature": temperature}
-    if tools:
-        body["tools"] = tools
-        body["tool_choice"] = "auto"
-    if json_mode:
-        body["response_format"] = {"type": "json_object"}
-    headers = {"Authorization": f"Bearer {config.LLM_API_KEY}"}
-    for attempt in range(6):
-        r = httpx.post(f"{config.LLM_BASE_URL}/chat/completions", json=body, headers=headers, timeout=90.0)
-        if r.status_code == 429 and re.search(r"per ?day|daily|PerDay", r.text):
-            fallback = config.LLM_FALLBACK_MODEL
-            if fallback and fallback != model:
-                log.warning("daily cap on %s; using %s for this call", model, fallback)
-                return _chat(messages, tools=tools, json_mode=json_mode, max_tokens=max_tokens,
-                             temperature=temperature, model=fallback)
-            raise RuntimeError(f"Daily limit reached for {model}: {r.text[:200]}")
-        if (r.status_code == 429 or r.status_code >= 500) and attempt < 5:
-            wait = _retry_after(r)
-            log.warning("LLM %s, retrying in %.1fs", r.status_code, wait)
-            time.sleep(wait)
+    chain = config.LLM_CHAIN
+    if model:
+        chain = [e for e in chain if e[2] == model] or [(config.LLM_BASE_URL, config.LLM_API_KEY, model)]
+    today = time.strftime("%Y-%m-%d")
+    last_error = "LLM unavailable"
+    for base_url, key, name in chain:
+        if _exhausted.get((base_url, name)) == today:
             continue
-        if r.status_code >= 400:
-            raise RuntimeError(f"LLM {r.status_code}: {r.text[:300]}")
-        return r.json()["choices"][0]["message"]
-    raise RuntimeError("LLM unavailable")
+        body: dict[str, Any] = {"model": name, "messages": messages,
+                                "max_tokens": max_tokens, "temperature": temperature}
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        headers = {"Authorization": f"Bearer {key}"}
+        for attempt in range(6):
+            r = httpx.post(f"{base_url}/chat/completions", json=body, headers=headers, timeout=90.0)
+            if r.status_code == 429 and _DAILY_RE.search(r.text):
+                _exhausted[(base_url, name)] = today
+                log.warning("daily quota exhausted on %s; moving down the chain", name)
+                last_error = f"daily limit reached for {name}"
+                break
+            if (r.status_code == 429 or r.status_code >= 500) and attempt < 5:
+                wait = _retry_after(r)
+                log.warning("LLM %s on %s, retrying in %.1fs", r.status_code, name, wait)
+                time.sleep(wait)
+                continue
+            if r.status_code >= 400:
+                raise RuntimeError(f"LLM {r.status_code} on {name}: {r.text[:300]}")
+            return r.json()["choices"][0]["message"]
+    raise RuntimeError(f"Every configured model is out of quota ({last_error})")
 
 
 _WAIT_RE = re.compile(r"try again in (?:(\d+)m)?(?:([\d.]+)s|([\d.]+)ms)")
