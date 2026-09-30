@@ -80,3 +80,13 @@ def test_outreach_targets_prefer_ai_health_startups(monkeypatch):
     scored = [(big, 5, ""), (startup, 4, ""), (aih, 4, ""), (done, 5, ""), (low, 3, "")]
     picked = [j.company for j, _ in outreach.pick_targets(scored, 3)]
     assert picked == ["HealthAI", "StartCo", "BigCo"]
+
+
+def test_due_slot(monkeypatch):
+    from datetime import datetime
+    monkeypatch.setattr(jobs.config, "JOBS_DIGEST_HOURS", [7, 19])
+    assert jobs.due_slot(datetime(2026, 9, 30, 6, 59), None) is None
+    assert jobs.due_slot(datetime(2026, 9, 30, 7, 0), None) == "2026-09-30:07"
+    assert jobs.due_slot(datetime(2026, 9, 30, 12, 0), "2026-09-30:07") is None
+    assert jobs.due_slot(datetime(2026, 9, 30, 19, 5), "2026-09-30:07") == "2026-09-30:19"
+    assert jobs.due_slot(datetime(2026, 10, 1, 7, 0), "2026-09-30:19") == "2026-10-01:07"

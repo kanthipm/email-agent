@@ -21,8 +21,9 @@ figures out who and what from your past mail.
   the exact current version was shown to you in a text. "Shorten it and send" therefore shows you the
   new text and asks again instead of sending.
 - **Style**: your last dozen sent emails from each account are fed to the model as examples.
-- **Morning job digest**: at `JOBS_DIGEST_HOUR` (default 8am) it collects the day's new-grad Software
-  Engineer and Product Manager postings from the SimplifyJobs and Jobright feeds, optionally adds a capped
+- **Job digest**: at each hour in `JOBS_DIGEST_HOURS` (default 7am and 7pm) it collects the new-grad Software
+  Engineer and Product Manager postings that appeared since the last digest (SimplifyJobs and Jobright feeds,
+  never repeating a posting already emailed), optionally adds a capped
   web search, has the model pick the top priorities, and emails the list from your Gmail to yourself.
   `JOBS_STRICT_NEW_GRAD=true` (default) drops any scraped posting whose title does not say new grad,
   entry level, graduate, APM, junior, 2026/2027, or similar, and anything with senior/staff/lead/II+ in it.
@@ -78,6 +79,18 @@ cd email-agent
    The value is in `.env`.
 
 ## Run
+
+On this machine the agent is registered as a Windows scheduled task named `EmailAgent` that starts hidden
+at logon and restarts itself if it crashes (`run_hidden.vbs` -> `run_agent.cmd` -> `main.py`, output in
+`logs/`). Manage it with Task Scheduler or:
+
+```powershell
+Start-ScheduledTask EmailAgent   # or Stop-ScheduledTask
+Get-Content logsgent.log -Tail 50
+curl http://localhost:8000/health
+```
+
+To run it by hand instead:
 
 ```powershell
 python main.py                  # server on :8000, poller + SMS worker start with it

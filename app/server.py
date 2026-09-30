@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -37,7 +38,12 @@ def _sms_worker() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    (config.ROOT / "logs").mkdir(exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                        handlers=[logging.StreamHandler(),
+                                  RotatingFileHandler(config.ROOT / "logs" / "agent.log", maxBytes=2_000_000,
+                                                      backupCount=3, encoding="utf-8")])
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     store.init()
     log.info("mail accounts: %s", list(providers()) or "none")
     threads = [threading.Thread(target=_sms_worker, daemon=True, name="sms-worker"),

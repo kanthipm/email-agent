@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS chat (
     content TEXT NOT NULL,
     created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS digest_seen (url TEXT PRIMARY KEY, seen_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS outreach (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company TEXT NOT NULL,
@@ -234,3 +235,18 @@ def outreach_rows(stage: str | None = None) -> list[dict]:
 def outreach_companies() -> set[str]:
     with conn() as c:
         return {r["company"].lower() for r in c.execute("SELECT company FROM outreach").fetchall()}
+
+
+# ---- job postings already emailed ----
+def seen_urls(urls: list[str]) -> set[str]:
+    if not urls:
+        return set()
+    with conn() as c:
+        marks = ",".join("?" for _ in urls)
+        return {r["url"] for r in c.execute(f"SELECT url FROM digest_seen WHERE url IN ({marks})", urls).fetchall()}
+
+
+def mark_seen(urls: list[str]) -> None:
+    ts = now_iso()
+    with conn() as c:
+        c.executemany("INSERT OR IGNORE INTO digest_seen VALUES(?,?)", [(u, ts) for u in urls])

@@ -119,7 +119,8 @@ def draft_for(job: Job, why: str) -> dict | None:
 
 
 def run_daily(scored: list[tuple[Job, int, str]], today: date) -> list[dict]:
-    if store.get_kv("outreach_last_run") == today.isoformat():
+    slot = f"{today.isoformat()}:{'am' if datetime.now().hour < 12 else 'pm'}"
+    if store.get_kv("outreach_last_run") == slot:
         return []
     rows = []
     for job, why in pick_targets(scored, config.OUTREACH_PER_DAY):
@@ -129,7 +130,7 @@ def run_daily(scored: list[tuple[Job, int, str]], today: date) -> list[dict]:
                 rows.append(row)
         except Exception:
             log.exception("outreach draft for %s failed", job.company)
-    store.set_kv("outreach_last_run", today.isoformat())
+    store.set_kv("outreach_last_run", slot)
     if rows:
         lines = [f"{len(rows)} outreach drafts ready:"]
         for r in rows:

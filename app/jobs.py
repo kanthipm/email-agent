@@ -142,7 +142,8 @@ def collect(since: date, today: date, web: bool = True) -> list[Job]:
         out.append(j)
     if dropped:
         log.info("strict new-grad filter dropped %d postings", dropped)
-    return out
+    already = store.seen_urls([j.url for j in out])
+    return [j for j in out if j.url not in already]
 
 
 # ---------------------------------------------------------------- strict new-grad filter
@@ -276,7 +277,8 @@ def build(today: date | None = None, web: bool = True, with_outreach: bool = Fal
     last = store.get_kv("jobs_digest_last_run")
     since = max(date.fromisoformat(last) if last else today - timedelta(days=1), today - timedelta(days=3))
     jobs = collect(since, today, web=web)
-    subject = f"Apply today {today.strftime('%a %b %d')}: {len(jobs)} new-grad SWE/PM postings"
+    when = "this morning" if datetime.now().hour < 12 else "this evening"
+    subject = f"Apply today {today.strftime('%a %b %d')} ({when}): {len(jobs)} new-grad SWE/PM postings"
     if not jobs:
         return subject, "Nothing new posted since the last digest.", []
     scored, ranked = rank(jobs, today)
@@ -297,7 +299,11 @@ def send(today: date | None = None) -> int:
         raise RuntimeError("Gmail is not configured; the digest is sent from Gmail")
     to = config.JOBS_DIGEST_TO or gmail.address
     subject, body, jobs = build(today, with_outreach=True)
+    if not jobs and store.get_kv("jobs_digest_last_run"):
+        log.info("no new postings since the last digest; nothing sent")
+        return 0
     gmail.send([to], subject, body)
+    store.mark_seen([j.url for j in jobs])
     store.set_kv("jobs_digest_last_run", today.isoformat())
     store.set_kv("jobs_digest_last", {"date": today.isoformat(), "count": len(jobs),
                                       "jobs": [asdict(j) for j in jobs]})
@@ -305,14 +311,24 @@ def send(today: date | None = None) -> int:
     return len(jobs)
 
 
+def due_slot(now: datetime, last_slot: str | None) -> str | None:
+    """The 'YYYY-MM-DD:HH' slot to run now, if a configured hour has passed today and not run yet."""
+    passed = [h for h in config.JOBS_DIGEST_HOURS if now.hour >= h]
+    if not passed:
+        return None
+    slot = f"{now.date().isoformat()}:{passed[-1]:02d}"
+    return None if slot == last_slot else slot
+
+
 def run_forever(stop: threading.Event) -> None:
-    """Send once a day at JOBS_DIGEST_HOUR local time, then check outreach follow-ups."""
+    """Run the digest (and outreach) at each hour in JOBS_DIGEST_HOURS, then check follow-ups."""
     while not stop.is_set():
         now = datetime.now()
-        if config.JOBS_DIGEST_ENABLED and now.hour >= config.JOBS_DIGEST_HOUR \
-                and store.get_kv("jobs_digest_last_run") != now.date().isoformat():
+        slot = due_slot(now, store.get_kv("jobs_digest_last_slot")) if config.JOBS_DIGEST_ENABLED else None
+        if slot:
             try:
                 send(now.date())
+                store.set_kv("jobs_digest_last_slot", slot)
             except Exception:
                 log.exception("job digest failed")
                 stop.wait(1800)
