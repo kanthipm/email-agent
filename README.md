@@ -10,6 +10,12 @@ figures out who and what from your past mail.
 - **Poller** scans each inbox every 30 minutes, never between 10pm and 7am local time (`QUIET_START_HOUR` /
   `QUIET_END_HOUR`). Overnight mail is picked up at 7am. The model decides whether a human reply is expected
   (newsletters, receipts, notifications, FYI threads are skipped) and drafts one in your style.
+- **Cold outreach**: after the digest, it picks up to `OUTREACH_PER_DAY` best-fit companies (AI / health-tech
+  startups first, then other startups, then big companies), looks up a founder or recruiter address via
+  Hunter.io when `HUNTER_API_KEY` is set, drafts a short note in your voice, and texts you the draft ids.
+  You approve by text like any other draft; if no address was found, text it the address. Sent notes get
+  follow-up drafts after `OUTREACH_FOLLOWUP_DAYS` (default 4 and 9 days) unless a reply arrives.
+  `python scripts\jobs_digest.py --send` runs the whole morning routine now.
 - **SMS** goes over Sendblue (iMessage/SMS). Only texts from `MY_PHONE` are accepted.
 - **Approval gate**: a draft carries a version number. Every edit bumps it. `send_draft` refuses unless
   the exact current version was shown to you in a text. "Shorten it and send" therefore shows you the
@@ -114,6 +120,7 @@ app/mail/gmail.py  Gmail API provider
 app/mail/outlook.py Microsoft Graph provider
 app/llm.py         groq: triage + drafting, SMS agent loop with tools
 app/resume.py      resume -> profile summary
+app/outreach.py    founder / recruiter cold-outreach pipeline with follow-ups
 app/poller.py      inbox scan loop
 app/jobs.py        daily new-grad job digest
 app/server.py      fastapi: webhook, health, background threads

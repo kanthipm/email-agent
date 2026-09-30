@@ -52,6 +52,10 @@ def _chat(messages: list[dict], *, tools: list[dict] | None = None, json_mode: b
                 log.warning("daily quota exhausted on %s; moving down the chain", name)
                 last_error = f"daily limit reached for {name}"
                 break
+            if r.status_code >= 500 and attempt >= 1 and len(chain) > 1:
+                log.warning("LLM %s on %s; trying the next model", r.status_code, name)
+                last_error = f"{name} unavailable ({r.status_code})"
+                break
             if (r.status_code == 429 or r.status_code >= 500) and attempt < 5:
                 wait = _retry_after(r)
                 log.warning("LLM %s on %s, retrying in %.1fs", r.status_code, name, wait)
@@ -234,6 +238,8 @@ def _tool_send_draft(draft_id: int) -> str:
     d = store.get_draft(draft_id)
     if not d or d["status"] != "pending":
         return f"Error: draft #{draft_id} is not pending."
+    if not d["to_addrs"]:
+        return "Error: this draft has no recipient yet. Ask the user for the address, then update_draft with to."
     if d["shown_version"] != d["version"]:
         return ("Error: the user has not seen the current version of this draft. Reply with the full draft "
                 "text verbatim and ask them to confirm; send only after they approve that exact text.")
@@ -245,7 +251,18 @@ def _tool_send_draft(draft_id: int) -> str:
         log.exception("send failed")
         return f"Error: sending failed: {e}"
     store.mark_sent(draft_id, sent_id)
+    if d["source"] == "outreach":
+        from app import outreach
+        try:
+            outreach.on_sent(draft_id, sent_id)
+        except Exception:
+            log.exception("outreach bookkeeping failed")
     return f"Sent draft #{draft_id} to {', '.join(d['to_addrs'])}."
+
+
+def _tool_outreach_status() -> str:
+    from app import outreach
+    return outreach.status_text()
 
 
 def _tool_discard_draft(draft_id: int) -> str:
@@ -325,6 +342,7 @@ TOOLS: list[dict] = [
         {"query": {"type": "string"}, "account": _ACCOUNT, "max_results": {"type": "integer"}}, ["query"]),
     _fn("read_email", "Read one email in full, with the rest of its thread.",
         {"account": _ACCOUNT, "email_id": {"type": "string"}}, ["account", "email_id"]),
+    _fn("outreach_status", "The cold-outreach pipeline: companies contacted, stage, follow-ups, addresses.", {}, []),
     _fn("find_contact",
         "Resolve a person's name or partial address to email addresses, ranked by how often the user emails them.",
         {"name": {"type": "string"}}, ["name"]),
@@ -334,6 +352,7 @@ _HANDLERS = {
     "list_drafts": _tool_list_drafts, "get_draft": _tool_get_draft, "update_draft": _tool_update_draft,
     "create_draft": _tool_create_draft, "send_draft": _tool_send_draft, "discard_draft": _tool_discard_draft,
     "search_emails": _tool_search_emails, "read_email": _tool_read_email, "find_contact": _tool_find_contact,
+    "outreach_status": _tool_outreach_status,
 }
 
 AGENT_RULES = """
@@ -346,6 +365,7 @@ AGENT_RULES = """
 - When they refer to an email ("reply to the thing from the landlord", "that email about the lease"), use search_emails, then read_email, then create_draft with reply_to_email_id.
 - When context is missing, search past mail before asking the user.
 - Write in the user's voice from the style samples. Plain text emails, no markdown.
+- Outreach drafts (cold emails to founders / recruiters about a job) are created every morning. Some have no recipient; when the user gives an address, update_draft with to, show the draft, and ask to confirm. "How's my outreach going" means outreach_status.
 - Never expose tool names or ids other than draft #ids to the user.
 """
 

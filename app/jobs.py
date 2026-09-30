@@ -37,6 +37,8 @@ class Job:
     location: str
     posted: str           # YYYY-MM-DD
     source: str
+    kind: str = "big"     # "startup" | "big", filled in by rank()
+    ai_health: bool = False
 
 
 # ---------------------------------------------------------------- sources
@@ -169,43 +171,48 @@ def is_new_grad(job: Job) -> bool:
 BATCH = 20
 
 
-def _score_batch(batch: list[Job], today: date) -> dict[int, tuple[int, str]]:
-    """Ask the model for a 0-5 priority per posting. 0 means not a new-grad role at all."""
+def _score_batch(batch: list[Job], today: date) -> dict[int, dict]:
+    """Ask the model for a 0-5 priority per posting (0 = not a new-grad role), plus whether the
+    employer is a startup and whether it is an AI or health-tech company."""
     profile = resume.profile()
     listing = "\n".join(f"{i}. [{j.track}] {j.company} — {j.title} — {j.location}" for i, j in enumerate(batch, 1))
     prompt = (
-        f"Rate new-grad job postings for {config.MY_NAME or 'the user'}, {profile}. Today is {today.isoformat()}.\n"
+        f"Rate new-grad job postings for {config.MY_NAME or 'the user'}: {profile}\nToday is {today.isoformat()}.\n"
         "Every posting MUST be a genuine new-grad / entry-level role (0-2 years, 2026-2027 grads). "
-        "Score each 0-5: 5 = apply today (strong company, unmistakably new-grad/APM/early-career, good fit); "
+        "Score each 0-5 for how strongly they should apply today given their background and preferences: "
+        "5 = apply today (strong or exciting company, unmistakably new-grad/APM/early-career, great fit); "
         "3 = worth a look; 1 = weak fit; 0 = not a new-grad role (senior, staff, manager of managers, 5+ years) "
         "or not a software/tech product role (retail merchandising, fashion or consumer-goods 'product' jobs, "
         "non-technical coordinator roles).\n"
-        'Reply with only JSON: {"scores": [{"i": <number>, "score": <0-5>, "why": "<max 12 words>"}]} '
-        "covering every number.\n\n" + listing
+        'Reply with only JSON: {"scores": [{"i": <number>, "score": <0-5>, "why": "<max 12 words on fit>", '
+        '"startup": <true if the employer is a startup or small company, false for large/public companies>, '
+        '"ai_health": <true if the company works in AI or health-tech>}]} covering every number.\n\n' + listing
     )
     try:
-        msg = llm._chat([{"role": "user", "content": prompt}], json_mode=True, max_tokens=3000, temperature=0.2)
+        msg = llm._chat([{"role": "user", "content": prompt}], json_mode=True, max_tokens=3500, temperature=0.2)
         data = json.loads(msg.get("content") or "{}")
     except RuntimeError as e:
         if "json_validate_failed" not in str(e):
             raise
         # Reasoning models sometimes return nothing in JSON mode; ask again free-form and parse leniently.
-        msg = llm._chat([{"role": "user", "content": prompt}], max_tokens=3000, temperature=0.2)
+        msg = llm._chat([{"role": "user", "content": prompt}], max_tokens=3500, temperature=0.2)
         m = re.search(r"\{.*\}", msg.get("content") or "", re.S)
         data = json.loads(m.group(0)) if m else {}
-    out: dict[int, tuple[int, str]] = {}
+    out: dict[int, dict] = {}
     for row in (data.get("scores") or []):
         try:
             i, score = int(row["i"]), max(0, min(5, int(row["score"])))
         except (KeyError, TypeError, ValueError):
             continue
         if 1 <= i <= len(batch):
-            out[i] = (score, str(row.get("why", ""))[:120])
+            out[i] = {"score": score, "why": str(row.get("why", ""))[:120],
+                      "startup": bool(row.get("startup")), "ai_health": bool(row.get("ai_health"))}
     return out
 
 
 def rank(jobs: list[Job], today: date) -> tuple[list[tuple[Job, int, str]], bool]:
-    """Returns (scored jobs, whether any batch was actually scored by the model)."""
+    """Returns (scored jobs, whether any batch was actually scored by the model). Also fills in
+    each Job's kind ("startup" | "big") and ai_health flag."""
     scored: list[tuple[Job, int, str]] = []
     any_scored = False
     for start in range(0, len(jobs), BATCH):
@@ -217,50 +224,70 @@ def rank(jobs: list[Job], today: date) -> tuple[list[tuple[Job, int, str]], bool
             log.warning("scoring batch failed, keeping unscored: %s", e)
             scores = {}
         for i, j in enumerate(batch, 1):
-            score, why = scores.get(i, (2, ""))
-            scored.append((j, score, why))
+            r = scores.get(i, {"score": 2, "why": "", "startup": False, "ai_health": False})
+            j.kind = "startup" if r["startup"] else "big"
+            j.ai_health = r["ai_health"]
+            scored.append((j, r["score"], r["why"]))
     return scored, any_scored
 
 
-def render(scored: list[tuple[Job, int, str]], since: date, ranked: bool = True) -> str:
+def _line(j: Job) -> str:
+    tags = " ".join(t for t in ("[startup]" if j.kind == "startup" else "", "[AI/health]" if j.ai_health else "") if t)
+    return f"{j.company} — {j.title} — {j.location}" + (f"  {tags}" if tags else "")
+
+
+def render(scored: list[tuple[Job, int, str]], since: date, ranked: bool = True,
+           outreach_rows: list[dict] | None = None) -> str:
     if not ranked:
-        keep = scored
         lines = ["Ranking unavailable today (model quota exhausted); full unranked list below.", ""]
         for track, label in (("PM", "PRODUCT"), ("SWE", "SOFTWARE")):
             lines += ["", label, ""]
-            lines += [f"- {j.company} — {j.title} — {j.location}\n  {j.url}" for j, _, _ in keep if j.track == track]
+            lines += [f"- {j.company} — {j.title} — {j.location}\n  {j.url}" for j, _, _ in scored if j.track == track]
         lines += ["", f"Sources: SimplifyJobs, Jobright. Postings since {since.isoformat()}."]
         return "\n".join(lines)
     keep = [t for t in scored if t[1] > 0]
-    top = sorted([t for t in keep if t[1] >= 4], key=lambda t: -t[1])[:10]
+    top = sorted([t for t in keep if t[1] >= 4], key=lambda t: (-t[1], not t[0].ai_health))[:10]
     top_urls = {t[0].url for t in top}
-    lines = ["TOP PRIORITY", ""]
+    lines = ["APPLY TODAY (best fit for your resume and preferences)", ""]
     if not top:
         lines.append("Nothing stood out today; see the full list below.")
     for n, (j, _, why) in enumerate(top, 1):
-        lines += [f"{n}. {j.company} — {j.title} — {j.location}", f"   {j.url}"] + ([f"   {why}"] if why else []) + [""]
+        lines += [f"{n}. {_line(j)}", f"   {j.url}"] + ([f"   {why}"] if why else []) + [""]
+    if outreach_rows:
+        lines += ["", "OUTREACH DRAFTS READY (text me 'show #id', then 'send #id' or changes)", ""]
+        for r in outreach_rows:
+            who = (f"{r['contact_name']} ({r['contact_title']}) <{r['contact_email']}>" if r["contact_email"]
+                   else "recipient not found yet: text me the founder's or recruiter's email")
+            lines += [f"- Draft #{r['draft_id']}: {r['company']} — {r['role_title']}", f"  To: {who}"]
     for track, label in (("PM", "ALSO NEW TODAY: PRODUCT"), ("SWE", "ALSO NEW TODAY: SOFTWARE")):
         rest = sorted([t for t in keep if t[0].track == track and t[0].url not in top_urls], key=lambda t: -t[1])
         if not rest:
             continue
         lines += ["", label, ""]
         for j, _, _ in rest:
-            lines += [f"- {j.company} — {j.title} — {j.location}", f"  {j.url}"]
+            lines += [f"- {_line(j)}", f"  {j.url}"]
     lines += ["", f"Sources: SimplifyJobs, Jobright{', web search' if config.JOBS_WEB_SEARCH else ''}. "
               f"Postings since {since.isoformat()}; {len(scored) - len(keep)} non-new-grad postings dropped."]
     return "\n".join(lines)
 
 
-def build(today: date | None = None, web: bool = True) -> tuple[str, str, list[Job]]:
+def build(today: date | None = None, web: bool = True, with_outreach: bool = False) -> tuple[str, str, list[Job]]:
     today = today or date.today()
     last = store.get_kv("jobs_digest_last_run")
     since = max(date.fromisoformat(last) if last else today - timedelta(days=1), today - timedelta(days=3))
     jobs = collect(since, today, web=web)
-    subject = f"New grad jobs {today.strftime('%a %b %d')}: {len(jobs)} new SWE/PM postings"
+    subject = f"Apply today {today.strftime('%a %b %d')}: {len(jobs)} new-grad SWE/PM postings"
     if not jobs:
         return subject, "Nothing new posted since the last digest.", []
     scored, ranked = rank(jobs, today)
-    return subject, render(scored, since, ranked), jobs
+    rows: list[dict] = []
+    if with_outreach and ranked and config.OUTREACH_ENABLED:
+        from app import outreach
+        try:
+            rows = outreach.run_daily(scored, today)
+        except Exception:
+            log.exception("outreach drafting failed")
+    return subject, render(scored, since, ranked, rows), jobs
 
 
 def send(today: date | None = None) -> int:
@@ -269,7 +296,7 @@ def send(today: date | None = None) -> int:
     if gmail is None:
         raise RuntimeError("Gmail is not configured; the digest is sent from Gmail")
     to = config.JOBS_DIGEST_TO or gmail.address
-    subject, body, jobs = build(today)
+    subject, body, jobs = build(today, with_outreach=True)
     gmail.send([to], subject, body)
     store.set_kv("jobs_digest_last_run", today.isoformat())
     store.set_kv("jobs_digest_last", {"date": today.isoformat(), "count": len(jobs),
@@ -279,7 +306,7 @@ def send(today: date | None = None) -> int:
 
 
 def run_forever(stop: threading.Event) -> None:
-    """Send once a day at JOBS_DIGEST_HOUR local time."""
+    """Send once a day at JOBS_DIGEST_HOUR local time, then check outreach follow-ups."""
     while not stop.is_set():
         now = datetime.now()
         if config.JOBS_DIGEST_ENABLED and now.hour >= config.JOBS_DIGEST_HOUR \
@@ -290,4 +317,10 @@ def run_forever(stop: threading.Event) -> None:
                 log.exception("job digest failed")
                 stop.wait(1800)
                 continue
+            if config.OUTREACH_ENABLED:
+                from app import outreach
+                try:
+                    outreach.check_followups()
+                except Exception:
+                    log.exception("outreach follow-up check failed")
         stop.wait(60)

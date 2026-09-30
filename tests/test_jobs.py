@@ -49,7 +49,7 @@ def test_render_orders_and_drops():
               (J("SWE", "Beta", "SWE I", "u2", "SF", "2026-09-28", "x"), 3, ""),
               (J("SWE", "Old", "Staff Eng", "u3", "SF", "2026-09-28", "x"), 0, "senior")]
     body = jobs.render(scored, date(2026, 9, 27))
-    assert body.index("TOP PRIORITY") < body.index("u1") < body.index("ALSO NEW TODAY: SOFTWARE") < body.index("u2")
+    assert body.index("APPLY TODAY") < body.index("u1") < body.index("ALSO NEW TODAY: SOFTWARE") < body.index("u2")
     assert "u3" not in body and "1 non-new-grad postings dropped" in body
     assert "ALSO NEW TODAY: PRODUCT" not in body   # the only PM posting is already in top
 
@@ -66,3 +66,17 @@ def test_strict_new_grad_gate():
     assert not jobs.is_new_grad(J("Software Engineer II"))
     assert not jobs.is_new_grad(J("Product Strategy Analyst III"))
     assert not jobs.is_new_grad(J("Staff Engineer", "simplify"))         # seniority beats trust
+
+
+def test_outreach_targets_prefer_ai_health_startups(monkeypatch):
+    from app import outreach, store
+    monkeypatch.setattr(store, "outreach_companies", lambda: {"already"})
+    J = jobs.Job
+    big = J("SWE", "BigCo", "New Grad SWE", "u1", "", "2026-09-30", "x", kind="big")
+    startup = J("SWE", "StartCo", "New Grad SWE", "u2", "", "2026-09-30", "x", kind="startup")
+    aih = J("PM", "HealthAI", "APM", "u3", "", "2026-09-30", "x", kind="startup", ai_health=True)
+    done = J("PM", "Already", "APM", "u4", "", "2026-09-30", "x", kind="startup", ai_health=True)
+    low = J("PM", "LowCo", "APM", "u5", "", "2026-09-30", "x", kind="startup", ai_health=True)
+    scored = [(big, 5, ""), (startup, 4, ""), (aih, 4, ""), (done, 5, ""), (low, 3, "")]
+    picked = [j.company for j, _ in outreach.pick_targets(scored, 3)]
+    assert picked == ["HealthAI", "StartCo", "BigCo"]

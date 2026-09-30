@@ -38,7 +38,24 @@ CREATE TABLE IF NOT EXISTS chat (
     content TEXT NOT NULL,
     created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS outreach (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company TEXT NOT NULL,
+    role_title TEXT NOT NULL,
+    job_url TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'startup',
+    contact_name TEXT NOT NULL DEFAULT '',
+    contact_title TEXT NOT NULL DEFAULT '',
+    contact_email TEXT NOT NULL DEFAULT '',
+    stage TEXT NOT NULL DEFAULT 'drafted',
+    draft_id INTEGER,
+    thread_id TEXT,
+    sent_at TEXT,
+    followups_sent INTEGER NOT NULL DEFAULT 0,
+    next_followup_at TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 """
+# outreach.stage: drafted -> sent -> replied | closed.  kind: startup | big.
 # drafts.status: pending | sent | discarded.  drafts.source: inbound | user.
 # drafts.shown_version: last version the user saw over SMS; send requires shown_version == version.
 # chat.content: JSON, either a string or a list of Claude content blocks.
@@ -181,3 +198,39 @@ def recent_chat(turns: int = 12) -> list[dict]:
 def clear_chat() -> None:
     with conn() as c:
         c.execute("DELETE FROM chat")
+
+
+# ---- outreach pipeline ----
+def add_outreach(**fields: Any) -> dict:
+    ts = now_iso()
+    cols = ", ".join(fields) + ", created_at, updated_at"
+    marks = ", ".join("?" for _ in fields) + ", ?, ?"
+    with conn() as c:
+        cur = c.execute(f"INSERT INTO outreach({cols}) VALUES({marks})", (*fields.values(), ts, ts))
+        return dict(c.execute("SELECT * FROM outreach WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+def update_outreach(outreach_id: int, **fields: Any) -> None:
+    sets = ", ".join(f"{k}=?" for k in fields) + ", updated_at=?"
+    with conn() as c:
+        c.execute(f"UPDATE outreach SET {sets} WHERE id=?", (*fields.values(), now_iso(), outreach_id))
+
+
+def outreach_by_draft(draft_id: int) -> dict | None:
+    with conn() as c:
+        r = c.execute("SELECT * FROM outreach WHERE draft_id=?", (draft_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def outreach_rows(stage: str | None = None) -> list[dict]:
+    with conn() as c:
+        if stage:
+            rows = c.execute("SELECT * FROM outreach WHERE stage=? ORDER BY id", (stage,)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM outreach ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def outreach_companies() -> set[str]:
+    with conn() as c:
+        return {r["company"].lower() for r in c.execute("SELECT company FROM outreach").fetchall()}

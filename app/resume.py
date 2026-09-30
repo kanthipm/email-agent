@@ -29,6 +29,14 @@ def text() -> str:
 
 def profile() -> str:
     """JOBS_PROFILE if set, else a cached model-written summary of the resume, else a generic line."""
+    return _with_prefs(_base_profile())
+
+
+def _with_prefs(base: str) -> str:
+    return f"{base} Preferences: {config.JOBS_PREFERENCES}" if config.JOBS_PREFERENCES else base
+
+
+def _base_profile() -> str:
     if config.JOBS_PROFILE:
         return config.JOBS_PROFILE
     p = Path(config.RESUME_PATH)
@@ -46,8 +54,11 @@ def profile() -> str:
         "(companies, projects, founder work), and what kinds of new-grad roles fit best (e.g. APM, SWE, "
         "ML). Plain prose, no headings, no bullet points.\n\n" + raw
     )
-    summary = (llm._chat([{"role": "user", "content": prompt}], max_tokens=600, temperature=0.2)
+    summary = (llm._chat([{"role": "user", "content": prompt}], max_tokens=2500, temperature=0.2)
                .get("content") or "").strip()
+    if len(summary.split()) < 40:      # truncated or empty: use it once but do not cache it
+        log.warning("resume summary looks truncated (%d words); not caching", len(summary.split()))
+        return summary or "a new grad looking for product management and software engineering roles"
     if summary:
         store.set_kv("resume_profile", {"stamp": stamp, "text": summary})
         log.info("resume profile refreshed from %s", p.name)
