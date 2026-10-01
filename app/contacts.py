@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
 import httpx
 
@@ -19,13 +20,19 @@ _GENERIC = ("info", "hello", "hi", "contact", "support", "press", "sales", "team
 
 
 def _search(query: str, n: int) -> list[dict]:
-    try:
-        from ddgs import DDGS
-        with DDGS() as d:
-            return list(d.text(query, max_results=n))
-    except Exception as e:
-        log.warning("web search failed for %r: %s", query, e)
-        return []
+    """DuckDuckGo text search, paced and retried once: bursts of queries get empty results."""
+    from ddgs import DDGS
+    for attempt in range(2):
+        time.sleep(1.5 if attempt == 0 else 6.0)
+        try:
+            with DDGS() as d:
+                results = list(d.text(query, max_results=n))
+            if results:
+                return results
+        except Exception as e:
+            if attempt == 1:
+                log.warning("web search failed for %r: %s", query, e)
+    return []
 
 
 def _pick_person(company: str, kind: str, results: list[dict]) -> dict:
