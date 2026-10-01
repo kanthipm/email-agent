@@ -42,41 +42,14 @@ def pick_targets(scored: list[tuple[Job, int, str]], n: int) -> list[tuple[Job, 
 
 
 # ---------------------------------------------------------------- contact lookup
-def _guess_domain(company: str) -> str:
-    msg = llm._chat([{"role": "user", "content":
-                      f'What is the primary website domain of the company "{company}"? Reply with only JSON '
-                      '{"domain": "example.com"} or {"domain": ""} if unsure.'}], json_mode=True, max_tokens=60)
-    try:
-        d = json.loads(msg.get("content") or "{}").get("domain", "")
-    except json.JSONDecodeError:
-        d = ""
-    return re.sub(r"^https?://|^www\.|/.*$", "", str(d)).strip().lower()
-
-
 def find_contact(job: Job) -> dict:
-    """{name, title, email} via Hunter.io domain search when a key is set; empty dict otherwise."""
-    if not config.HUNTER_API_KEY:
+    """Founder / hiring lead via free web search (name, title, LinkedIn, domain, verified or guessed email)."""
+    from app import contacts
+    try:
+        return contacts.find(job.company, job.kind)
+    except Exception as e:
+        log.warning("contact search failed for %s: %s", job.company, e)
         return {}
-    domain = _guess_domain(job.company)
-    if not domain:
-        return {}
-    r = httpx.get("https://api.hunter.io/v2/domain-search",
-                  params={"domain": domain, "api_key": config.HUNTER_API_KEY, "limit": 25}, timeout=30)
-    if r.status_code != 200:
-        log.warning("hunter %s for %s: %s", r.status_code, domain, r.text[:120])
-        return {}
-    people = r.json().get("data", {}).get("emails", [])
-    wanted = _STARTUP_TITLES if job.kind == "startup" else _BIG_TITLES
-    best, best_rank = None, len(wanted)
-    for p in people:
-        title = (p.get("position") or "").lower()
-        for i, w in enumerate(wanted):
-            if w in title and i < best_rank:
-                best, best_rank = p, i
-    if not best:
-        return {}
-    name = " ".join(x for x in (best.get("first_name"), best.get("last_name")) if x)
-    return {"name": name, "title": best.get("position") or "", "email": best.get("value") or ""}
 
 
 # ---------------------------------------------------------------- drafting
@@ -110,12 +83,18 @@ def draft_for(job: Job, why: str) -> dict | None:
     subject, body = _write(job, why, contact)
     if not body:
         return None
+    info = {"brief": "", "linkedin_note": "", "hiring": ""}
+    if job.kind == "startup":
+        from app import briefs
+        info = briefs.write(job.company, job.title, job.url, contact)
     d = store.create_draft(account="gmail", to_addrs=[contact["email"]] if contact.get("email") else [],
                            subject=subject, body=body, source="outreach",
                            summary=f"cold outreach to {job.company} ({job.title})")
     return store.add_outreach(company=job.company, role_title=job.title, job_url=job.url, kind=job.kind,
                               contact_name=contact.get("name", ""), contact_title=contact.get("title", ""),
-                              contact_email=contact.get("email", ""), draft_id=d["id"])
+                              contact_email=contact.get("email", ""), contact_linkedin=contact.get("linkedin", ""),
+                              email_guess=contact.get("email_guess", ""), brief=info["brief"],
+                              linkedin_note=info["linkedin_note"], hiring=info["hiring"], draft_id=d["id"])
 
 
 def run_daily(scored: list[tuple[Job, int, str]], today: date) -> list[dict]:
@@ -132,11 +111,14 @@ def run_daily(scored: list[tuple[Job, int, str]], today: date) -> list[dict]:
             log.exception("outreach draft for %s failed", job.company)
     store.set_kv("outreach_last_run", slot)
     if rows:
-        lines = [f"{len(rows)} outreach drafts ready:"]
+        lines = [f"{len(rows)} outreach drafts ready (full briefs are in the digest email):"]
         for r in rows:
-            to = r["contact_email"] or "no address yet"
-            lines.append(f"#{r['draft_id']} {r['company']} ({r['role_title'][:40]}) -> {to}")
-        lines.append("Text 'show #id' to read one, 'send #id' to send, or tell me the changes / the address.")
+            who = f"{r['contact_name']} ({r['contact_title']})" if r["contact_name"] else "founder not identified"
+            to = r["contact_email"] or (f"likely {r['email_guess']} (unverified)" if r["email_guess"] else "no email found")
+            lines.append(f"#{r['draft_id']} {r['company']}: {who}; {to}"
+                         + (f"; LinkedIn {r['contact_linkedin']}" if r["contact_linkedin"] else ""))
+        lines.append("Text 'brief #id' for the startup brief and LinkedIn note, 'show #id' for the email, "
+                     "'send #id to <address>' to send, or tell me changes.")
         sms.send_text("\n".join(lines))
         store.append_chat({"role": "user", "content": "[event] Morning outreach drafts were created and listed to the user by text."})
         store.append_chat({"role": "assistant", "content": "\n".join(lines)})
@@ -214,6 +196,24 @@ def check_followups() -> list[str]:
         store.append_chat({"role": "user", "content": "[event] Outreach follow-up check ran; the user was texted."})
         store.append_chat({"role": "assistant", "content": "\n".join(notes)})
     return notes
+
+
+def detail_text(ref: int) -> str:
+    """Brief + contact + LinkedIn note for an outreach row, looked up by outreach id or draft id."""
+    rows = store.outreach_rows()
+    row = next((r for r in rows if r["id"] == ref), None) or next((r for r in rows if r["draft_id"] == ref), None)
+    if not row:
+        return f"No outreach #{ref}."
+    who = f"{row['contact_name']} ({row['contact_title']})" if row["contact_name"] else "founder not identified"
+    email = row["contact_email"] or (f"likely {row['email_guess']} (unverified guess)" if row["email_guess"] else "none found")
+    out = [f"{row['company']} — {row['role_title']}", f"Posting: {row['job_url']}", f"Contact: {who}",
+           f"Email: {email}", f"LinkedIn: {row['contact_linkedin'] or 'not found'}",
+           f"Hiring: {row['hiring'] or 'unclear'}", f"Stage: {row['stage']} (email draft #{row['draft_id']})"]
+    if row["brief"]:
+        out += ["", row["brief"]]
+    if row["linkedin_note"]:
+        out += ["", "LinkedIn note (copy/paste):", row["linkedin_note"]]
+    return "\n".join(out)
 
 
 def status_text() -> str:

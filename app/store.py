@@ -66,9 +66,23 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_MIGRATIONS = [
+    "ALTER TABLE outreach ADD COLUMN contact_linkedin TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE outreach ADD COLUMN email_guess TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE outreach ADD COLUMN brief TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE outreach ADD COLUMN linkedin_note TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE outreach ADD COLUMN hiring TEXT NOT NULL DEFAULT ''",
+]
+
+
 def init() -> None:
     with conn() as c:
         c.executescript(SCHEMA)
+        for stmt in _MIGRATIONS:
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError:
+                pass    # column already exists
 
 
 @contextmanager

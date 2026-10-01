@@ -265,6 +265,11 @@ def _tool_outreach_status() -> str:
     return outreach.status_text()
 
 
+def _tool_outreach_brief(ref: int) -> str:
+    from app import outreach
+    return outreach.detail_text(ref)
+
+
 def _tool_discard_draft(draft_id: int) -> str:
     d = store.get_draft(draft_id)
     if not d or d["status"] != "pending":
@@ -343,6 +348,8 @@ TOOLS: list[dict] = [
     _fn("read_email", "Read one email in full, with the rest of its thread.",
         {"account": _ACCOUNT, "email_id": {"type": "string"}}, ["account", "email_id"]),
     _fn("outreach_status", "The cold-outreach pipeline: companies contacted, stage, follow-ups, addresses.", {}, []),
+    _fn("outreach_brief", "Startup brief, founder contact, LinkedIn URL and LinkedIn note for one outreach target, "
+        "by outreach id or its draft id.", {"ref": {"type": "integer"}}, ["ref"]),
     _fn("find_contact",
         "Resolve a person's name or partial address to email addresses, ranked by how often the user emails them.",
         {"name": {"type": "string"}}, ["name"]),
@@ -352,7 +359,7 @@ _HANDLERS = {
     "list_drafts": _tool_list_drafts, "get_draft": _tool_get_draft, "update_draft": _tool_update_draft,
     "create_draft": _tool_create_draft, "send_draft": _tool_send_draft, "discard_draft": _tool_discard_draft,
     "search_emails": _tool_search_emails, "read_email": _tool_read_email, "find_contact": _tool_find_contact,
-    "outreach_status": _tool_outreach_status,
+    "outreach_status": _tool_outreach_status, "outreach_brief": _tool_outreach_brief,
 }
 
 AGENT_RULES = """
@@ -365,7 +372,7 @@ AGENT_RULES = """
 - When they refer to an email ("reply to the thing from the landlord", "that email about the lease"), use search_emails, then read_email, then create_draft with reply_to_email_id.
 - When context is missing, search past mail before asking the user.
 - Write in the user's voice from the style samples. Plain text emails, no markdown.
-- Outreach drafts (cold emails to founders / recruiters about a job) are created every morning. Some have no recipient; when the user gives an address, update_draft with to, show the draft, and ask to confirm. "How's my outreach going" means outreach_status.
+- Outreach drafts (cold emails to founders / recruiters about a job) are created every morning. Some have no recipient; when the user gives an address, update_draft with to, show the draft, and ask to confirm. "How's my outreach going" means outreach_status. "brief #12" / "tell me about <company>" means outreach_brief; relay the brief and the LinkedIn note in full so they can paste it into LinkedIn.
 - Never expose tool names or ids other than draft #ids to the user.
 """
 

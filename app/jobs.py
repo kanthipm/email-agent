@@ -255,11 +255,18 @@ def render(scored: list[tuple[Job, int, str]], since: date, ranked: bool = True,
     for n, (j, _, why) in enumerate(top, 1):
         lines += [f"{n}. {_line(j)}", f"   {j.url}"] + ([f"   {why}"] if why else []) + [""]
     if outreach_rows:
-        lines += ["", "OUTREACH DRAFTS READY (text me 'show #id', then 'send #id' or changes)", ""]
+        lines += ["", "OUTREACH: STARTUP BRIEFS AND DRAFTS", ""]
         for r in outreach_rows:
-            who = (f"{r['contact_name']} ({r['contact_title']}) <{r['contact_email']}>" if r["contact_email"]
-                   else "recipient not found yet: text me the founder's or recruiter's email")
-            lines += [f"- Draft #{r['draft_id']}: {r['company']} — {r['role_title']}", f"  To: {who}"]
+            who = f"{r['contact_name']} ({r['contact_title']})" if r["contact_name"] else "founder not identified"
+            email = r["contact_email"] or (f"likely {r['email_guess']} (unverified; confirm before sending)"
+                                           if r["email_guess"] else "no email found")
+            lines += [f"=== {r['company']} — {r['role_title']}", f"Posting: {r['job_url']}", f"Contact: {who}",
+                      f"Email: {email}", f"LinkedIn: {r['contact_linkedin'] or 'not found'}",
+                      f"Hiring: {r['hiring'] or 'unclear'}", f"Email draft: #{r['draft_id']} (text 'show #{r['draft_id']}')", ""]
+            if r.get("brief"):
+                lines += [r["brief"], ""]
+            if r.get("linkedin_note"):
+                lines += ["LinkedIn note (copy/paste):", r["linkedin_note"], ""]
     for track, label in (("PM", "ALSO NEW TODAY: PRODUCT"), ("SWE", "ALSO NEW TODAY: SOFTWARE")):
         rest = sorted([t for t in keep if t[0].track == track and t[0].url not in top_urls], key=lambda t: -t[1])
         if not rest:
