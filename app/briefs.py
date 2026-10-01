@@ -45,5 +45,9 @@ def write(company: str, role_title: str, job_url: str, contact: dict) -> dict:
     except (RuntimeError, json.JSONDecodeError) as e:
         log.warning("brief failed for %s: %s", company, e)
         return {"brief": "", "linkedin_note": "", "hiring": "unclear"}
+    if isinstance(data, list):
+        data = next((d for d in data if isinstance(d, dict)), {})
+    if not isinstance(data, dict):
+        data = {}
     return {"brief": str(data.get("brief", "")).strip(), "linkedin_note": str(data.get("linkedin_note", "")).strip()[:300],
             "hiring": str(data.get("hiring", "unclear"))}

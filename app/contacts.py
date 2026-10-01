@@ -46,7 +46,11 @@ def _pick_person(company: str, kind: str, results: list[dict]) -> dict:
     except (RuntimeError, json.JSONDecodeError) as e:
         log.warning("contact pick failed for %s: %s", company, e)
         return {}
-    return {k: str(data.get(k, "")).strip() for k in ("name", "title", "linkedin", "domain", "confidence")}
+    if isinstance(data, list):           # some models wrap the object in a list
+        data = next((d for d in data if isinstance(d, dict)), {})
+    if not isinstance(data, dict):
+        return {}
+    return {k: str(data.get(k, "") or "").strip() for k in ("name", "title", "linkedin", "domain", "confidence")}
 
 
 def _public_emails(domain: str) -> list[str]:
