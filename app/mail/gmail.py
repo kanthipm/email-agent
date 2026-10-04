@@ -6,6 +6,10 @@ import email.utils
 from datetime import datetime, timezone
 from email.message import EmailMessage as MimeMessage
 from html.parser import HTMLParser
+import logging
+import socket
+import ssl
+import time
 from typing import Any
 
 from google.auth.transport.requests import Request
@@ -131,6 +135,26 @@ def parse_message(raw: dict[str, Any], own_address: str) -> EmailMessage:
     )
 
 
+log = logging.getLogger(__name__)
+_TRANSIENT = (ConnectionError, TimeoutError, socket.timeout, ssl.SSLError, OSError)
+
+
+def _run(request, tries: int = 4):
+    """Execute a Gmail API request, retrying transient network failures (sleep/resume resets,
+    aborted connections, timeouts) with backoff."""
+    for attempt in range(tries):
+        try:
+            return request.execute()
+        except HttpError:
+            raise
+        except _TRANSIENT as e:
+            if attempt == tries - 1:
+                raise
+            wait = 3 * 2 ** attempt
+            log.warning("gmail network error (%s); retrying in %ss", e, wait)
+            time.sleep(wait)
+
+
 def _wrap(err: HttpError, what: str) -> RuntimeError:
     status = getattr(err.resp, "status", "?")
     return RuntimeError(f"Gmail API error during {what} (HTTP {status}): {err.reason or err}")
@@ -147,7 +171,7 @@ class GmailProvider:
         self._svc = build("gmail", "v1", credentials=creds, cache_discovery=False)
         self._users = self._svc.users()
         try:
-            self.address: str = self._users.getProfile(userId="me").execute()["emailAddress"].lower()
+            self.address: str = _run(self._users.getProfile(userId="me"))["emailAddress"].lower()
         except HttpError as e:
             raise _wrap(e, "getProfile") from e
 
@@ -156,9 +180,9 @@ class GmailProvider:
         token: str | None = None
         try:
             while len(ids) < cap:
-                resp = self._users.messages().list(
+                resp = _run(self._users.messages().list(
                     userId="me", q=query, maxResults=min(cap - len(ids), 100), pageToken=token
-                ).execute()
+                ))
                 ids.extend(m["id"] for m in resp.get("messages", []))
                 token = resp.get("nextPageToken")
                 if not token:
@@ -183,14 +207,14 @@ class GmailProvider:
 
     def get_message(self, message_id: str) -> EmailMessage:
         try:
-            raw = self._users.messages().get(userId="me", id=message_id, format="full").execute()
+            raw = _run(self._users.messages().get(userId="me", id=message_id, format="full"))
         except HttpError as e:
             raise _wrap(e, f"get message {message_id}") from e
         return parse_message(raw, self.address)
 
     def get_thread(self, thread_id: str) -> list[EmailMessage]:
         try:
-            raw = self._users.threads().get(userId="me", id=thread_id, format="full").execute()
+            raw = _run(self._users.threads().get(userId="me", id=thread_id, format="full"))
         except HttpError as e:
             raise _wrap(e, f"get thread {thread_id}") from e
         msgs = [parse_message(m, self.address) for m in raw.get("messages", [])]
@@ -250,7 +274,7 @@ class GmailProvider:
         msg.set_content(body)
         request["raw"] = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
         try:
-            sent = self._users.messages().send(userId="me", body=request).execute()
+            sent = _run(self._users.messages().send(userId="me", body=request))
         except HttpError as e:
             raise _wrap(e, "send") from e
         return sent["id"]

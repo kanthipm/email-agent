@@ -309,13 +309,27 @@ def send(today: date | None = None) -> int:
     if not jobs and store.get_kv("jobs_digest_last_run"):
         log.info("no new postings since the last digest; nothing sent")
         return 0
-    gmail.send([to], subject, body)
-    store.mark_seen([j.url for j in jobs])
+    store.mark_seen([j.url for j in jobs])          # built once; a failed send is retried from the buffer
+    store.set_kv("digest_unsent", {"to": to, "subject": subject, "body": body, "count": len(jobs)})
+    flush_unsent()
     store.set_kv("jobs_digest_last_run", today.isoformat())
     store.set_kv("jobs_digest_last", {"date": today.isoformat(), "count": len(jobs),
                                       "jobs": [asdict(j) for j in jobs]})
-    log.info("job digest sent to %s: %d postings", to, len(jobs))
     return len(jobs)
+
+
+def flush_unsent() -> bool:
+    """Send the buffered digest if one is waiting. Raises on failure so the caller retries later."""
+    pending = store.get_kv("digest_unsent")
+    if not pending:
+        return False
+    gmail = providers().get("gmail")
+    if gmail is None:
+        raise RuntimeError("Gmail is not configured")
+    gmail.send([pending["to"]], pending["subject"], pending["body"])
+    store.set_kv("digest_unsent", None)
+    log.info("job digest sent to %s: %d postings", pending["to"], pending["count"])
+    return True
 
 
 def due_slot(now: datetime, last_slot: str | None) -> str | None:
@@ -331,6 +345,13 @@ def run_forever(stop: threading.Event) -> None:
     """Run the digest (and outreach) at each hour in JOBS_DIGEST_HOURS, then check follow-ups."""
     while not stop.is_set():
         now = datetime.now()
+        try:
+            if flush_unsent():
+                store.set_kv("jobs_digest_last_slot", due_slot(now, None) or store.get_kv("jobs_digest_last_slot"))
+        except Exception as e:
+            log.warning("buffered digest still unsent: %s", e)
+            stop.wait(300)
+            continue
         slot = due_slot(now, store.get_kv("jobs_digest_last_slot")) if config.JOBS_DIGEST_ENABLED else None
         if slot:
             try:
@@ -338,7 +359,7 @@ def run_forever(stop: threading.Event) -> None:
                 store.set_kv("jobs_digest_last_slot", slot)
             except Exception:
                 log.exception("job digest failed")
-                stop.wait(1800)
+                stop.wait(300)
                 continue
             if config.OUTREACH_ENABLED:
                 from app import outreach
