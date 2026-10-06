@@ -118,13 +118,19 @@ def _web_search(today: date) -> list[Job]:
 
 def collect(since: date, today: date, web: bool = True) -> list[Job]:
     jobs: list[Job] = []
+    ok = 0
     for name, fn in [("simplify", lambda: _simplify(since)),
                      ("jobright PM", lambda: _jobright("PM", JOBRIGHT_REPOS["PM"], since, today)),
                      ("jobright SWE", lambda: _jobright("SWE", JOBRIGHT_REPOS["SWE"], since, today))]:
         try:
             jobs += fn()
+            ok += 1
         except Exception as e:
             log.warning("job source %s failed: %s", name, e)
+    if not ok:
+        # Typically no network yet after sleep/resume. Fail the run so the slot is retried, instead
+        # of recording an empty digest as "nothing new".
+        raise RuntimeError("every job feed was unreachable")
     if web and config.JOBS_WEB_SEARCH:
         try:
             jobs += _web_search(today)
