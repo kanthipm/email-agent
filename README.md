@@ -81,8 +81,9 @@ cd email-agent
 ## Run
 
 On this machine the agent is registered as a Windows scheduled task named `EmailAgent` that starts hidden
-at logon, restarts fresh at 6:50am and 6:50pm (waking the machine if needed) so a stale process never
-blocks a run, and restarts itself if it crashes (`run_hidden.vbs` -> `run_agent.cmd` -> `main.py`, output in
+at logon, restarts fresh at 6:50am and 6:50pm local time (waking the machine if needed), and runs a
+30-minute watchdog that relaunches the agent only if it stops answering /health. Digest runs wait for
+the network to come back after a wake, and a partly unreachable feed is retried before it counts (`run_hidden.vbs` -> `run_agent.cmd` -> `main.py`, output in
 `logs/`). Manage it with Task Scheduler or:
 
 ```powershell
