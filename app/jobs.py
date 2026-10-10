@@ -116,6 +116,26 @@ def _web_search(today: date) -> list[Job]:
                 i.get("location", ""), today.isoformat(), "web") for i in items if i.get("url")]
 
 
+class FeedError(RuntimeError):
+    def __init__(self, msg: str, partial: list[Job]):
+        super().__init__(msg)
+        self.partial = partial
+
+
+def wait_for_network(max_wait: int = 600) -> bool:
+    """Block until the job feeds and Gmail resolve, up to max_wait seconds (Wi-Fi after a wake)."""
+    import socket
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            socket.getaddrinfo("raw.githubusercontent.com", 443)
+            socket.getaddrinfo("oauth2.googleapis.com", 443)
+            return True
+        except OSError:
+            time.sleep(15)
+    return False
+
+
 def collect(since: date, today: date, web: bool = True) -> list[Job]:
     jobs: list[Job] = []
     ok = 0
@@ -127,10 +147,7 @@ def collect(since: date, today: date, web: bool = True) -> list[Job]:
             ok += 1
         except Exception as e:
             log.warning("job source %s failed: %s", name, e)
-    if not ok:
-        # Typically no network yet after sleep/resume. Fail the run so the slot is retried, instead
-        # of recording an empty digest as "nothing new".
-        raise RuntimeError("every job feed was unreachable")
+    feeds_down = 3 - ok
     if web and config.JOBS_WEB_SEARCH:
         try:
             jobs += _web_search(today)
@@ -149,7 +166,13 @@ def collect(since: date, today: date, web: bool = True) -> list[Job]:
     if dropped:
         log.info("strict new-grad filter dropped %d postings", dropped)
     already = store.seen_urls([j.url for j in out])
-    return [j for j in out if j.url not in already]
+    fresh = [j for j in out if j.url not in already]
+    if feeds_down:
+        # Typically no network yet after sleep/resume. Fail the run so the slot is retried instead of
+        # recording a partial fetch as "nothing new"; run_forever accepts the partial list after
+        # MAX_FEED_RETRIES attempts on the same slot.
+        raise FeedError(f"{feeds_down} of 3 job feeds unreachable", partial=fresh)
+    return fresh
 
 
 # ---------------------------------------------------------------- strict new-grad filter
@@ -285,11 +308,20 @@ def render(scored: list[tuple[Job, int, str]], since: date, ranked: bool = True,
     return "\n".join(lines)
 
 
-def build(today: date | None = None, web: bool = True, with_outreach: bool = False) -> tuple[str, str, list[Job]]:
+MAX_FEED_RETRIES = 6
+
+
+def build(today: date | None = None, web: bool = True, with_outreach: bool = False,
+          accept_partial: bool = False) -> tuple[str, str, list[Job]]:
     today = today or date.today()
     last = store.get_kv("jobs_digest_last_run")
     since = max(date.fromisoformat(last) if last else today - timedelta(days=1), today - timedelta(days=3))
-    jobs = collect(since, today, web=web)
+    try:
+        jobs = collect(since, today, web=web)
+    except FeedError as e:
+        if not accept_partial:
+            raise
+        jobs = e.partial
     when = "this morning" if datetime.now().hour < 12 else "this evening"
     subject = f"Apply today {today.strftime('%a %b %d')} ({when}): {len(jobs)} new-grad SWE/PM postings"
     if not jobs:
@@ -305,13 +337,13 @@ def build(today: date | None = None, web: bool = True, with_outreach: bool = Fal
     return subject, render(scored, since, ranked, rows), jobs
 
 
-def send(today: date | None = None) -> int:
+def send(today: date | None = None, accept_partial: bool = False) -> int:
     today = today or date.today()
     gmail = providers().get("gmail")
     if gmail is None:
         raise RuntimeError("Gmail is not configured; the digest is sent from Gmail")
     to = config.JOBS_DIGEST_TO or gmail.address
-    subject, body, jobs = build(today, with_outreach=True)
+    subject, body, jobs = build(today, with_outreach=True, accept_partial=accept_partial)
     if not jobs and store.get_kv("jobs_digest_last_run"):
         log.info("no new postings since the last digest; nothing sent")
         return 0
@@ -360,9 +392,30 @@ def run_forever(stop: threading.Event) -> None:
             continue
         slot = due_slot(now, store.get_kv("jobs_digest_last_slot")) if config.JOBS_DIGEST_ENABLED else None
         if slot:
+            if not wait_for_network():
+                log.warning("no network; digest slot %s postponed", slot)
+                stop.wait(300)
+                continue
+            tries = store.get_kv("digest_slot_tries") or {}
             try:
                 send(now.date())
                 store.set_kv("jobs_digest_last_slot", slot)
+                store.set_kv("digest_slot_tries", {})
+            except FeedError as e:
+                n = tries.get(slot, 0) + 1
+                store.set_kv("digest_slot_tries", {slot: n})
+                if n >= MAX_FEED_RETRIES:
+                    log.warning("%s after %d tries; sending what was fetched", e, n)
+                    try:
+                        send(now.date(), accept_partial=True)
+                        store.set_kv("jobs_digest_last_slot", slot)
+                        store.set_kv("digest_slot_tries", {})
+                    except Exception:
+                        log.exception("job digest failed")
+                else:
+                    log.warning("%s; retrying slot %s in 5 min (%d/%d)", e, slot, n, MAX_FEED_RETRIES)
+                stop.wait(300)
+                continue
             except Exception:
                 log.exception("job digest failed")
                 stop.wait(300)

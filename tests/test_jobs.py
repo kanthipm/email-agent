@@ -90,3 +90,16 @@ def test_due_slot(monkeypatch):
     assert jobs.due_slot(datetime(2026, 9, 30, 12, 0), "2026-09-30:07") is None
     assert jobs.due_slot(datetime(2026, 9, 30, 19, 5), "2026-09-30:07") == "2026-09-30:19"
     assert jobs.due_slot(datetime(2026, 10, 1, 7, 0), "2026-09-30:19") == "2026-10-01:07"
+
+
+def test_partial_feed_failure_is_retryable(monkeypatch):
+    from app import store
+    monkeypatch.setattr(store, "seen_urls", lambda urls: set())
+    monkeypatch.setattr(jobs.config, "JOBS_STRICT_NEW_GRAD", False)
+    ok = jobs.Job("PM", "Acme", "APM", "u1", "NYC", "2026-10-10", "jobright")
+    monkeypatch.setattr(jobs, "_simplify", lambda since: (_ for _ in ()).throw(OSError("dns")))
+    monkeypatch.setattr(jobs, "_jobright", lambda *a: [ok])
+    import pytest
+    with pytest.raises(jobs.FeedError) as e:
+        jobs.collect(date(2026, 10, 9), date(2026, 10, 10), web=False)
+    assert [j.url for j in e.value.partial] == ["u1"]
