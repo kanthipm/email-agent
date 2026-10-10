@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS chat (
     created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS digest_seen (url TEXT PRIMARY KEY, seen_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS opportunities (
+    url TEXT PRIMARY KEY, name TEXT NOT NULL, org TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '',
+    "for" TEXT NOT NULL DEFAULT '', deadline TEXT NOT NULL DEFAULT '', amount TEXT NOT NULL DEFAULT '',
+    eligibility TEXT NOT NULL DEFAULT '', why TEXT NOT NULL DEFAULT '', first_seen TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS outreach (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company TEXT NOT NULL,
@@ -264,3 +268,24 @@ def mark_seen(urls: list[str]) -> None:
     ts = now_iso()
     with conn() as c:
         c.executemany("INSERT OR IGNORE INTO digest_seen VALUES(?,?)", [(u, ts) for u in urls])
+
+
+# ---- fellowships / grants / scholarships ----
+def upsert_opportunity(o: dict) -> bool:
+    """Insert or refresh by URL. Returns True when it was not known before."""
+    with conn() as c:
+        known = c.execute("SELECT 1 FROM opportunities WHERE url=?", (o["url"],)).fetchone() is not None
+        if known:
+            c.execute("UPDATE opportunities SET deadline=?, amount=?, eligibility=?, why=? WHERE url=?",
+                      (o["deadline"], o["amount"], o["eligibility"], o["why"], o["url"]))
+        else:
+            c.execute('INSERT INTO opportunities(url,name,org,kind,"for",deadline,amount,eligibility,why,first_seen) '
+                      "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                      (o["url"], o["name"], o["org"], o["kind"], o["for"], o["deadline"], o["amount"],
+                       o["eligibility"], o["why"], now_iso()))
+    return not known
+
+
+def opportunities() -> list[dict]:
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM opportunities ORDER BY deadline").fetchall()]

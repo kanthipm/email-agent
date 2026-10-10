@@ -334,7 +334,14 @@ def build(today: date | None = None, web: bool = True, with_outreach: bool = Fal
             rows = outreach.run_daily(scored, today)
         except Exception:
             log.exception("outreach drafting failed")
-    return subject, render(scored, since, ranked, rows), jobs
+    body = render(scored, since, ranked, rows)
+    if with_outreach and config.OPPS_ENABLED and store.get_kv("opps_last_run") != today.isoformat():
+        from app import opportunities
+        try:
+            body += "\n" + opportunities.render(*opportunities.refresh(today))
+        except Exception:
+            log.exception("opportunity scan failed")
+    return subject, body, jobs
 
 
 def send(today: date | None = None, accept_partial: bool = False) -> int:
