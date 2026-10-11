@@ -109,11 +109,18 @@ def _extract(today: date, notes: str) -> list[dict]:
         '"amount": "", "eligibility": "<one line>", "why": "<one line on fit>", "url": ""}]}\n\n' + notes
     )
     try:
-        data = json.loads(llm._chat([{"role": "user", "content": prompt}], json_mode=True, max_tokens=4000,
-                                    temperature=0.2).get("content") or "{}")
-    except (RuntimeError, json.JSONDecodeError) as e:
+        raw = llm._chat([{"role": "user", "content": prompt}], json_mode=True, max_tokens=6000,
+                        temperature=0.2).get("content") or "{}"
+    except RuntimeError as e:
         log.warning("opportunity extraction failed: %s", e)
         return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # Truncated output: keep every complete object that was emitted before the cut.
+        objs = re.findall(r"\{[^{}]*\}", raw)
+        data = {"opportunities": [json.loads(o) for o in objs if _loads_ok(o)]}
+        log.warning("opportunity JSON truncated; salvaged %d entries", len(data["opportunities"]))
     if isinstance(data, list):
         data = {"opportunities": data}
     out = []
@@ -130,6 +137,14 @@ def _extract(today: date, notes: str) -> list[dict]:
         out.append({k: str(o.get(k, "")).strip() for k in ("name", "org", "kind", "for", "deadline", "amount",
                                                            "eligibility", "why", "url")})
     return out
+
+
+def _loads_ok(text: str) -> bool:
+    try:
+        json.loads(text)
+        return True
+    except json.JSONDecodeError:
+        return False
 
 
 def refresh(today: date, full: bool = False) -> tuple[list[dict], list[dict]]:
