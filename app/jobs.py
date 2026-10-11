@@ -433,4 +433,10 @@ def run_forever(stop: threading.Event) -> None:
                     outreach.check_followups()
                 except Exception:
                     log.exception("outreach follow-up check failed")
+            from app import opportunities
+            try:
+                if opportunities.share_due(now.date()):
+                    opportunities.share_send(now.date())
+            except Exception:
+                log.exception("weekly opportunities email failed")
         stop.wait(60)

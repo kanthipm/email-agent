@@ -210,3 +210,46 @@ def status_text(today: date | None = None) -> str:
     if not rows:
         return "No deadlines in the next three weeks."
     return "\n".join(f"{o['deadline']}: {o['name']} ({o['org']}) {o['for']} — {o['url']}" for o in rows)
+
+
+# ---------------------------------------------------------------- weekly share
+def share_rows(today: date) -> list[dict]:
+    """Startup-related programs (plus any names pinned via kv share_include) with live deadlines."""
+    pinned = {n.lower() for n in store.get_kv("share_include", [])}
+    rows = [o for o in store.opportunities()
+            if (o["for"] in ("medpull", "both") or o["name"].lower() in pinned)
+            and (o["deadline"] == "rolling" or o["deadline"] >= today.isoformat())]
+    rows.sort(key=lambda o: (o["deadline"] == "rolling", o["deadline"]))
+    return rows
+
+
+def share_email(today: date) -> tuple[str, str]:
+    rows = share_rows(today)
+    lines = [f"Hey {config.OPPS_SHARE_GREETING}," if config.OPPS_SHARE_GREETING else "Hey,", "",
+             "Weekly list of startup programs, fellowships and grants my job-search agent is tracking, in case any are "
+             "useful for you. Deadlines first, rolling ones after.", ""]
+    for o in rows:
+        due = "rolling" if o["deadline"] == "rolling" else o["deadline"]
+        lines += [f"- {o['name']} ({o['org']}) — {o['kind']}, due {due}" + (f", {o['amount']}" if o["amount"] else ""),
+                  f"  {o['url']}", f"  {o['eligibility']}"]
+    lines += ["", "Worth double-checking dates on the program sites before planning around them.", "", "Best,",
+              (config.MY_NAME or "").split()[0] if config.MY_NAME else ""]
+    return f"Startup fellowships, accelerators and grants: week of {today.strftime('%b %d')}", "\n".join(lines)
+
+
+def share_due(today: date) -> bool:
+    return (config.OPPS_SHARE_TO and today.weekday() == config.OPPS_SHARE_WEEKDAY
+            and store.get_kv("opps_share_last") != today.isocalendar()[:2].__str__())
+
+
+def share_send(today: date) -> int:
+    from app.mail import providers
+    gmail = providers().get("gmail")
+    if gmail is None:
+        raise RuntimeError("Gmail is not configured")
+    subject, body = share_email(today)
+    to = [a.strip() for a in config.OPPS_SHARE_TO.split(",") if a.strip()]
+    gmail.send(to, subject, body)
+    store.set_kv("opps_share_last", today.isocalendar()[:2].__str__())
+    log.info("weekly opportunities email sent to %s", ", ".join(to))
+    return len(share_rows(today))
