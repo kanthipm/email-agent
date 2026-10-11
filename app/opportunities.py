@@ -6,10 +6,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, timedelta
+
+import httpx
 
 from app import config, llm, resume, store
 from app.contacts import _search
+from app.mail.gmail import html_to_text
 
 log = logging.getLogger(__name__)
 UPCOMING_DAYS = 21
@@ -61,19 +65,32 @@ PROGRAMS = [
 ROTATE = 10
 
 
-def _snippets(today: date) -> str:
-    year, nxt = today.year, today.year + 1
-    start = (today.toordinal() * ROTATE) % len(PROGRAMS)
-    named = [PROGRAMS[(start + i) % len(PROGRAMS)] for i in range(ROTATE)]
-    queries = [q.format(year=year, next=nxt) for q in QUERIES] + [f"{name} {year} application deadline" for name in named]
+_DATE_HINT = re.compile(r"deadline|apply by|applications? (close|due|open)|due date|closes on|last day to apply", re.I)
+
+
+def _page_excerpt(url: str) -> str:
+    """Lines from the page that mention a deadline, so the extractor sees dates the snippet lacked."""
+    try:
+        r = httpx.get(url, timeout=10, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200 or "html" not in r.headers.get("content-type", ""):
+            return ""
+    except Exception:
+        return ""
+    text = html_to_text(r.text)
+    hits = [ln.strip() for ln in text.splitlines() if _DATE_HINT.search(ln) and len(ln.strip()) > 15]
+    return " | ".join(dict.fromkeys(hits))[:700]
+
+
+def _gather(queries: list[str], fetch_pages: bool) -> str:
     seen, lines = set(), []
     for q in queries:
-        for r in _search(q, 5):
+        for i, r in enumerate(_search(q, 5)):
             key = r.get("href", "")
-            if key in seen:
+            if not key or key in seen:
                 continue
             seen.add(key)
-            lines.append(f"- {r.get('title', '')} | {key} | {r.get('body', '')[:240]}")
+            extra = _page_excerpt(key) if fetch_pages and i == 0 else ""
+            lines.append(f"- {r.get('title', '')} | {key} | {r.get('body', '')[:240]}" + (f" | PAGE: {extra}" if extra else ""))
     return "\n".join(lines)[:14000]
 
 
@@ -115,9 +132,25 @@ def _extract(today: date, notes: str) -> list[dict]:
     return out
 
 
-def refresh(today: date) -> tuple[list[dict], list[dict]]:
-    """Search, extract, remember. Returns (newly found, everything due within UPCOMING_DAYS)."""
-    found = _extract(today, _snippets(today))
+def refresh(today: date, full: bool = False) -> tuple[list[dict], list[dict]]:
+    """Search, extract, remember. Returns (newly found, everything due within UPCOMING_DAYS).
+    Daily: the generic queries plus a rotating slice of named programs. The first run, or
+    full=True, checks every named program."""
+    year, nxt = today.year, today.year + 1
+    if full or not store.get_kv("opps_full_run"):
+        names = list(PROGRAMS)
+    else:
+        start = (today.toordinal() * ROTATE) % len(PROGRAMS)
+        names = [PROGRAMS[(start + i) % len(PROGRAMS)] for i in range(ROTATE)]
+    batches = [[q.format(year=year, next=nxt) for q in QUERIES]]
+    batches += [[f"{n} {year} application deadline" for n in names[i:i + ROTATE]] for i in range(0, len(names), ROTATE)]
+    found: list[dict] = []
+    for i, batch in enumerate(batches):
+        notes = _gather(batch, fetch_pages=i > 0)
+        if notes:
+            found += _extract(today, notes)
+    if len(names) == len(PROGRAMS):
+        store.set_kv("opps_full_run", today.isoformat())
     new = [o for o in found if store.upsert_opportunity(o)]
     store.set_kv("opps_last_run", today.isoformat())
     return new, upcoming(today)
