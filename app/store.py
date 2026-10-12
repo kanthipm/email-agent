@@ -76,6 +76,8 @@ _MIGRATIONS = [
     "ALTER TABLE outreach ADD COLUMN brief TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE outreach ADD COLUMN linkedin_note TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE outreach ADD COLUMN hiring TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE opportunities ADD COLUMN user_status TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE opportunities ADD COLUMN user_notes TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -289,3 +291,8 @@ def upsert_opportunity(o: dict) -> bool:
 def opportunities() -> list[dict]:
     with conn() as c:
         return [dict(r) for r in c.execute("SELECT * FROM opportunities ORDER BY deadline").fetchall()]
+
+
+def set_opportunity_user(url: str, status: str, notes: str) -> None:
+    with conn() as c:
+        c.execute("UPDATE opportunities SET user_status=?, user_notes=? WHERE url=?", (status, notes, url))

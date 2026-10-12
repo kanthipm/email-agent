@@ -439,4 +439,10 @@ def run_forever(stop: threading.Event) -> None:
                     opportunities.share_send(now.date())
             except Exception:
                 log.exception("weekly opportunities email failed")
+            if config.SHEET_SYNC:
+                from app import sheets
+                try:
+                    sheets.sync()
+                except Exception as e:
+                    log.warning("sheet sync skipped: %s", e)
         stop.wait(60)

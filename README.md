@@ -20,6 +20,8 @@ figures out who and what from your past mail.
   dated opportunities you or MedPull (`COMPANY_PROFILE`) could apply to: student founder fellowships, health-tech
   accelerators, non-dilutive grants, CS scholarships, entrepreneurship programs. Deadlines inside three weeks are
   listed first, student and MedPull-eligible programs before the rest; text "what deadlines are coming up" any time.
+  Both trackers are mirrored to a Google Sheet ("Job search tracker" in your Drive) after every digest run;
+  set Status to applied / skip / done on the Opportunities tab and the digest stops showing that entry.
   Every Monday the startup-related subset is also emailed to `OPPS_SHARE_TO` (`python scripts\opportunities.py --share`
   sends it now).
 - **SMS** goes over Sendblue (iMessage/SMS). Only texts from `MY_PHONE` are accepted.

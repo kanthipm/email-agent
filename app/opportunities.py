@@ -18,6 +18,7 @@ from app.mail.gmail import html_to_text
 log = logging.getLogger(__name__)
 UPCOMING_DAYS = 21
 KINDS = ("fellowship", "grant", "scholarship", "accelerator", "competition", "program")
+HIDE_STATUSES = {"applied", "skip", "skipped", "done", "no", "ignore", "closed"}
 
 QUERIES = [
     # startup / founder programs (student-founder first)
@@ -173,7 +174,9 @@ def refresh(today: date, full: bool = False) -> tuple[list[dict], list[dict]]:
 
 def upcoming(today: date) -> list[dict]:
     horizon = (today + timedelta(days=UPCOMING_DAYS)).isoformat()
-    rows = [r for r in store.opportunities() if r["deadline"] == "rolling" or today.isoformat() <= r["deadline"] <= horizon]
+    rows = [r for r in store.opportunities()
+            if (r["deadline"] == "rolling" or today.isoformat() <= r["deadline"] <= horizon)
+            and r.get("user_status", "").strip().lower() not in HIDE_STATUSES]
     rows.sort(key=lambda r: (r["deadline"] == "rolling", r["deadline"], r["for"] != "medpull"))
     return rows
 
@@ -189,6 +192,9 @@ def render(new: list[dict], due: list[dict]) -> str:
     if not new and not due:
         return ""
     lines = ["", "FELLOWSHIPS, GRANTS, SCHOLARSHIPS, PROGRAMS", ""]
+    link = store.get_kv("sheet_id")
+    if link:
+        lines += [f"Tracker sheet (mark Status = applied / skip there): https://docs.google.com/spreadsheets/d/{link}", ""]
     if due:
         lines.append(f"Deadlines in the next {UPCOMING_DAYS} days (student and MedPull-eligible first):")
         for o in due:
@@ -218,7 +224,8 @@ def share_rows(today: date) -> list[dict]:
     pinned = {n.lower() for n in store.get_kv("share_include", [])}
     rows = [o for o in store.opportunities()
             if (o["for"] in ("medpull", "both") or o["name"].lower() in pinned)
-            and (o["deadline"] == "rolling" or o["deadline"] >= today.isoformat())]
+            and (o["deadline"] == "rolling" or o["deadline"] >= today.isoformat())
+            and o.get("user_status", "").strip().lower() not in HIDE_STATUSES]
     rows.sort(key=lambda o: (o["deadline"] == "rolling", o["deadline"]))
     return rows
 

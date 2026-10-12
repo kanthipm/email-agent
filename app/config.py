@@ -76,6 +76,7 @@ OPPS_ENABLED = _bool("OPPS_ENABLED", True)
 OPPS_SHARE_TO = os.getenv("OPPS_SHARE_TO", "")
 OPPS_SHARE_WEEKDAY = int(os.getenv("OPPS_SHARE_WEEKDAY", "0"))   # 0 = Monday
 OPPS_SHARE_GREETING = os.getenv("OPPS_SHARE_GREETING", "")
+SHEET_SYNC = _bool("SHEET_SYNC", True)
 OUTREACH_ENABLED = _bool("OUTREACH_ENABLED", True)
 OUTREACH_PER_DAY = int(os.getenv("OUTREACH_PER_DAY", "3"))
 OUTREACH_FOLLOWUP_DAYS = [int(x) for x in os.getenv("OUTREACH_FOLLOWUP_DAYS", "4,9").split(",") if x.strip()]

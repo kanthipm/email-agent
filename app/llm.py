@@ -271,8 +271,9 @@ def _tool_outreach_brief(ref: int) -> str:
 
 
 def _tool_deadlines() -> str:
-    from app import opportunities
-    return opportunities.status_text()
+    from app import opportunities, sheets
+    link = sheets.sheet_url()
+    return opportunities.status_text() + (f"\nTracker sheet: {link}" if link else "")
 
 
 def _tool_discard_draft(draft_id: int) -> str:

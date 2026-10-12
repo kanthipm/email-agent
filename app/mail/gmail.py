@@ -20,7 +20,7 @@ from googleapiclient.errors import HttpError
 from app import config
 from app.mail.base import Contact, EmailMessage
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/spreadsheets"]
 _HEADERS = ("From", "To", "Cc", "Subject", "Date", "Message-ID")
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre"}
 
@@ -164,10 +164,12 @@ class GmailProvider:
     name = "gmail"
 
     def __init__(self) -> None:
-        creds = Credentials.from_authorized_user_file(str(config.GMAIL_TOKEN), SCOPES)
+        # Not pinned to SCOPES: an older token without the Sheets scope must keep working for mail.
+        creds = Credentials.from_authorized_user_file(str(config.GMAIL_TOKEN))
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
             config.GMAIL_TOKEN.write_text(creds.to_json())
+        self._creds = creds
         self._svc = build("gmail", "v1", credentials=creds, cache_discovery=False)
         self._users = self._svc.users()
         try:
