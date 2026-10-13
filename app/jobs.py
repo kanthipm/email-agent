@@ -390,6 +390,7 @@ def run_forever(stop: threading.Event) -> None:
     """Run the digest (and outreach) at each hour in JOBS_DIGEST_HOURS, then check follow-ups."""
     while not stop.is_set():
         now = datetime.now()
+        store.beat("jobs")
         try:
             if flush_unsent():
                 store.set_kv("jobs_digest_last_slot", due_slot(now, None) or store.get_kv("jobs_digest_last_slot"))

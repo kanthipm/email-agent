@@ -296,3 +296,13 @@ def opportunities() -> list[dict]:
 def set_opportunity_user(url: str, status: str, notes: str) -> None:
     with conn() as c:
         c.execute("UPDATE opportunities SET user_status=?, user_notes=? WHERE url=?", (status, notes, url))
+
+
+# ---- thread heartbeats (for /health and the watchdog) ----
+def beat(name: str) -> None:
+    set_kv(f"hb:{name}", now_iso())
+
+
+def heartbeats() -> dict[str, str]:
+    with conn() as c:
+        return {r["key"][3:]: json.loads(r["value"]) for r in c.execute("SELECT key, value FROM kv WHERE key LIKE 'hb:%'")}

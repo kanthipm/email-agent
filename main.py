@@ -15,8 +15,10 @@ PID_FILE = config.ROOT / "logs" / "agent.pid"
 
 
 def _healthy() -> bool:
+    """Up and with live worker threads; a stale heartbeat counts as unhealthy so it gets replaced."""
     try:
-        return httpx.get(f"http://127.0.0.1:{config.PORT}/health", timeout=5).status_code == 200
+        r = httpx.get(f"http://127.0.0.1:{config.PORT}/health", timeout=5)
+        return r.status_code == 200 and bool(r.json().get("ok"))
     except Exception:
         return False
 

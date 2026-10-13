@@ -82,6 +82,7 @@ def quiet_hours(now: datetime | None = None) -> bool:
 
 def run_forever(stop: threading.Event) -> None:
     while not stop.is_set():
+        store.beat("poller")
         if quiet_hours():
             stop.wait(300)
             continue
